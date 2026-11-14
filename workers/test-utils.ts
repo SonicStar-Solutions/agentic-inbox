@@ -84,7 +84,9 @@ export function makeFakeEnv(opts: {
 				return objects.has(key) ? { key } : null;
 			},
 			async get(key: string) {
-				return objects.has(key) ? { body: objects.get(key), json: async () => ({}) } : null;
+				if (!objects.has(key)) return null;
+				const value = objects.get(key);
+				return { body: value, json: async () => (value && typeof value === "object" ? value : {}) };
 			},
 			async put(key: string, value: unknown) {
 				objects.set(key, value);

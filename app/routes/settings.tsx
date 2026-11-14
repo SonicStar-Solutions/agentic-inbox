@@ -20,12 +20,16 @@ export default function SettingsRoute() {
 
 	const [displayName, setDisplayName] = useState("");
 	const [agentPrompt, setAgentPrompt] = useState("");
+	const [autoDraft, setAutoDraft] = useState(true);
+	const [agentModel, setAgentModel] = useState("");
 	const [isSaving, setIsSaving] = useState(false);
 
 	useEffect(() => {
 		if (mailbox) {
 			setDisplayName(mailbox.settings?.fromName || mailbox.name || "");
 			setAgentPrompt(mailbox.settings?.agentSystemPrompt || "");
+			setAutoDraft(mailbox.settings?.autoDraft?.enabled !== false);
+			setAgentModel(mailbox.settings?.agentModel || "");
 		}
 	}, [mailbox]);
 
@@ -36,13 +40,15 @@ export default function SettingsRoute() {
 			...mailbox.settings,
 			fromName: displayName,
 			agentSystemPrompt: agentPrompt.trim() || undefined,
+			autoDraft: { enabled: autoDraft },
+			agentModel: agentModel.trim() || undefined,
 		};
 		try {
 			await updateMailboxMutation.mutateAsync({ mailboxId, settings });
 			toastManager.add({ title: "Settings saved!" });
-		} catch {
+		} catch (err) {
 			toastManager.add({
-				title: "Failed to save settings",
+				title: err instanceof Error && err.message ? err.message : "Failed to save settings",
 				variant: "error",
 			});
 		} finally {
@@ -81,6 +87,47 @@ export default function SettingsRoute() {
 							onChange={(e) => setDisplayName(e.target.value)}
 						/>
 						<Input label="Email" type="email" value={mailbox.email} disabled />
+					</div>
+				</div>
+
+				{/* Auto-draft and model */}
+				<div className="rounded-lg border border-kumo-line bg-kumo-base p-5">
+					<div className="text-sm font-medium text-kumo-default mb-4">
+						Auto-draft
+					</div>
+					<label className="flex items-start gap-3 cursor-pointer">
+						<input
+							type="checkbox"
+							checked={autoDraft}
+							onChange={(e) => setAutoDraft(e.target.checked)}
+							className="mt-0.5 h-4 w-4"
+						/>
+						<span>
+							<span className="block text-sm text-kumo-default">
+								Draft a reply automatically when new mail arrives
+							</span>
+							<span className="block text-xs text-kumo-subtle mt-0.5">
+								Drafts are never sent without your confirmation. Turn this off to stop
+								the agent from running on incoming mail for this mailbox.
+							</span>
+						</span>
+					</label>
+					<div className="mt-4">
+						<Input
+							label="AI model (optional)"
+							value={agentModel}
+							onChange={(e) => setAgentModel(e.target.value)}
+							placeholder="Leave empty for the default, e.g. @cf/moonshotai/kimi-k2.5"
+							list="agent-model-suggestions"
+						/>
+						<datalist id="agent-model-suggestions">
+							<option value="@cf/moonshotai/kimi-k2.5" />
+							<option value="@cf/zai-org/glm-4.7-flash" />
+						</datalist>
+						<p className="text-xs text-kumo-subtle mt-2">
+							Applies to the agent chat and auto-drafts for this mailbox. The prompt-injection
+							scanner and draft verifier use the deployment-wide models.
+						</p>
 					</div>
 				</div>
 

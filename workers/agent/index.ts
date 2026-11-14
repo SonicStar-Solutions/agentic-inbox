@@ -14,6 +14,7 @@ import { z } from "zod";
 import type { EmailFull, EmailMetadata } from "../lib/schemas";
 import { verifyDraft, isPromptInjection } from "../lib/ai";
 import { resolveModel } from "../lib/models";
+import { isAutoDraftEnabled, modelForMailbox, readMailboxSettings } from "../lib/mailbox-settings";
 import { analyzeAutoDraftSteps, autoDraftChatSummary, shouldSaveInlineDraft } from "../lib/auto-draft";
 import {
 	getMailboxStub,
@@ -95,18 +96,9 @@ Use discard_draft to delete drafts that the operator rejects or that are no long
  * Fetch the custom system prompt for a mailbox from its R2 settings.
  * Falls back to DEFAULT_SYSTEM_PROMPT if none is configured.
  */
-async function getSystemPrompt(env: Env, mailboxId: string): Promise<string> {
-	try {
-		const key = `mailboxes/${mailboxId}.json`;
-		const obj = await env.BUCKET.get(key);
-		if (obj) {
-			const settings = await obj.json<Record<string, unknown>>();
-			if (typeof settings.agentSystemPrompt === "string" && settings.agentSystemPrompt.trim()) {
-				return settings.agentSystemPrompt;
-			}
-		}
-	} catch {
-		// Fall through to default
+function getSystemPrompt(settings: Record<string, unknown>): string {
+	if (typeof settings.agentSystemPrompt === "string" && settings.agentSystemPrompt.trim()) {
+		return settings.agentSystemPrompt;
 	}
 	return DEFAULT_SYSTEM_PROMPT;
 }
@@ -293,10 +285,11 @@ export class EmailAgent extends AIChatAgent<any> {
 		const mailboxId = this.name;
 		const workersai = createWorkersAI({ binding: env.AI });
 		const tools = createEmailTools(env, mailboxId);
-		const systemPrompt = await getSystemPrompt(env, mailboxId);
+		const settings = await readMailboxSettings(env.BUCKET, mailboxId);
+		const systemPrompt = getSystemPrompt(settings);
 
 		const result = streamText({
-			model: workersai(resolveModel(env, "agent")),
+			model: workersai(modelForMailbox(env, settings, "agent")),
 			system: systemPrompt,
 			messages: await convertToModelMessages(this.messages),
 			tools,
@@ -351,7 +344,11 @@ export class EmailAgent extends AIChatAgent<any> {
 		const env = this.env as Env;
 		const workersai = createWorkersAI({ binding: env.AI });
 		const tools = createEmailTools(env, emailData.mailboxId);
-		const systemPrompt = await getSystemPrompt(env, emailData.mailboxId);
+		const mailboxSettings = await readMailboxSettings(env.BUCKET, emailData.mailboxId);
+		if (!isAutoDraftEnabled(mailboxSettings)) {
+			return { status: "skipped", reason: "auto-draft disabled for this mailbox" };
+		}
+		const systemPrompt = getSystemPrompt(mailboxSettings);
 
 		// Pre-read the email and thread so the agent has full context
 		// without needing to waste tool calls discovering it
@@ -478,7 +475,7 @@ Based on the email content and thread context above, draft a reply using draft_r
 
 		try {
 			const result = await generateText({
-				model: workersai(resolveModel(env, "autoDraft")),
+				model: workersai(modelForMailbox(env, mailboxSettings, "autoDraft")),
 				system: systemPrompt,
 				messages: await convertToModelMessages(messages),
 				tools,
