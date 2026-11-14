@@ -13,6 +13,7 @@ export default [
 	route("mailbox/:mailboxId", "routes/mailbox.tsx", [
 		index("routes/mailbox-index.tsx"),
 		route("emails/:folder", "routes/email-list.tsx"),
+		route("scheduled", "routes/scheduled.tsx"),
 		route("settings", "routes/settings.tsx"),
 		route("search", "routes/search-results.tsx"),
 	]),

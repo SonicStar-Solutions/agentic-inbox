@@ -15,6 +15,7 @@ import {
 	toEmailListValue,
 } from "~/lib/utils";
 import { pendingSends } from "~/lib/pending-send";
+import { useScheduleEmail } from "~/queries/scheduled";
 import { useDeleteEmail, useForwardEmail, useReplyToEmail, useSaveDraft, useSendEmail } from "~/queries/emails";
 import { useMailbox } from "~/queries/mailboxes";
 import { useUIStore } from "~/hooks/useUIStore";
@@ -172,6 +173,7 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 	const replyMutation = useReplyToEmail();
 	const forwardMutation = useForwardEmail();
 	const deleteEmailMutation = useDeleteEmail();
+	const scheduleMutation = useScheduleEmail();
 
 	const [to, setTo] = useState("");
 	const [cc, setCc] = useState("");
@@ -283,5 +285,39 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 		onClose();
 	};
 
-	return { to, setTo, cc, setCc, bcc, setBcc, showCcBcc, setShowCcBcc, subject, setSubject, body, setBody, error, setError, isSavingDraft, isSending, formTitle, handleSaveDraft, handleSend, closeCompose, closePanel };
+	/** Send later (#89): the server sends it at the chosen time, even with the browser closed. */
+	const handleSchedule = async (when: Date, onClose: () => void) => {
+		if (isSending) return; setError(null);
+		if (!currentMailbox || !mailboxId) { setError("No mailbox selected."); return; }
+		const toRecipients = splitEmailList(to);
+		if (toRecipients.length === 0) { setError("Add at least one recipient."); return; }
+		if (!subject.trim()) { setError("Add a subject."); return; }
+		const mode = composeOptions.mode;
+		const originalId = composeOptions.originalEmail?.id || composeOptions.draftEmail?.in_reply_to;
+		const isReply = (mode === "reply" || mode === "reply-all") && !!originalId;
+		const fromName = currentMailbox.settings?.fromName || currentMailbox.name;
+		const from = fromName && fromName !== currentMailbox.email ? { email: currentMailbox.email, name: fromName } : currentMailbox.email;
+		const email = {
+			to: toEmailListValue(toRecipients),
+			cc: toEmailListValue(splitEmailList(cc)),
+			bcc: toEmailListValue(splitEmailList(bcc)),
+			from, subject, html: body, text: htmlToPlainText(body),
+		};
+		setIsSending(true);
+		try {
+			await scheduleMutation.mutateAsync({
+				mailboxId,
+				request: { kind: isReply ? "reply" : "compose", ...(isReply ? { originalEmailId: originalId } : {}), send_at: when.toISOString(), email },
+			});
+			const draftId = composeOptions.draftEmail?.id;
+			if (draftId) deleteEmailMutation.mutate({ mailboxId, id: draftId });
+			toastManager.add({ title: `Scheduled for ${when.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}` });
+			onClose();
+		} catch (err: unknown) {
+			const message = (err instanceof Error ? err.message : null) || "Failed to schedule email.";
+			setError(message); toastManager.add({ title: message, variant: "error" });
+		} finally { setIsSending(false); }
+	};
+
+	return { handleSchedule, canSchedule: composeOptions.mode !== "forward", to, setTo, cc, setCc, bcc, setBcc, showCcBcc, setShowCcBcc, subject, setSubject, body, setBody, error, setError, isSavingDraft, isSending, formTitle, handleSaveDraft, handleSend, closeCompose, closePanel };
 }

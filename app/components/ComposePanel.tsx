@@ -7,6 +7,7 @@ import { FloppyDiskIcon, PaperPlaneTiltIcon, XIcon } from "@phosphor-icons/react
 import { useParams } from "react-router";
 import { useComposeForm } from "~/hooks/useComposeForm";
 import RecipientInput from "./RecipientInput";
+import ScheduleSendMenu from "./ScheduleSendMenu";
 import RichTextEditor from "./RichTextEditor";
 
 export default function ComposePanel() {
@@ -34,6 +35,8 @@ export default function ComposePanel() {
 		formTitle,
 		handleSaveDraft,
 		handleSend,
+		handleSchedule,
+		canSchedule,
 		closeCompose,
 		closePanel,
 	} = useComposeForm(mailboxId, folder);
@@ -167,6 +170,12 @@ export default function ComposePanel() {
 							>
 								{isSavingDraft ? "Saving..." : "Save as Draft"}
 							</Button>
+							{canSchedule && (
+								<ScheduleSendMenu
+									disabled={isSavingDraft || isSending}
+									onSchedule={(when) => handleSchedule(when, closePanel)}
+								/>
+							)}
 							<Button
 								type="submit"
 								variant="primary"

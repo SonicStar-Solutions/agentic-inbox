@@ -16,9 +16,11 @@ import {
 } from "@phosphor-icons/react";
 import { useMemo, useState } from "react";
 import { NavLink, useNavigate, useParams } from "react-router";
+import { ClockIcon } from "@phosphor-icons/react";
 import { Folders, SYSTEM_FOLDER_IDS } from "shared/folders";
 import { useCreateFolder, useFolders } from "~/queries/folders";
 import { useMailbox } from "~/queries/mailboxes";
+import { useScheduled } from "~/queries/scheduled";
 import { useUIStore } from "~/hooks/useUIStore";
 
 const FOLDER_ICONS: Record<string, React.ReactNode> = {
@@ -75,6 +77,8 @@ function FolderLink({
 
 export default function Sidebar() {
 	const { mailboxId } = useParams<{ mailboxId: string }>();
+	const { data: scheduledItems } = useScheduled(mailboxId);
+	const scheduledCount = scheduledItems?.filter((i) => i.status !== "sending").length ?? 0;
 	const navigate = useNavigate();
 	const { data: folders = [] } = useFolders(mailboxId);
 	const createFolderMutation = useCreateFolder();
@@ -169,6 +173,14 @@ export default function Sidebar() {
 						onClick={handleNavClick}
 					/>
 				))}
+
+				<FolderLink
+					to={`/mailbox/${mailboxId}/scheduled`}
+					icon={<ClockIcon size={18} weight="regular" />}
+					label="Scheduled"
+					unreadCount={scheduledCount}
+					onClick={handleNavClick}
+				/>
 
 				{/* Custom folders */}
 				{customFolders.length > 0 && (
