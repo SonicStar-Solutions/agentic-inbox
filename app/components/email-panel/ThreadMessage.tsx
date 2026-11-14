@@ -12,11 +12,10 @@ import {
 	TrashIcon,
 } from "@phosphor-icons/react";
 import EmailAttachmentList from "~/components/EmailAttachmentList";
-import EmailIframe from "~/components/EmailIframe";
+import MessageBody from "~/components/MessageBody";
 import {
 	formatDetailDate,
 	formatShortDate,
-	rewriteInlineImages,
 	stripHtml,
 } from "~/lib/utils";
 import type { Email } from "~/types";
@@ -157,15 +156,7 @@ export default function ThreadMessage({
 				</div>
 
 				<div className="md:ml-[42px]">
-					<EmailIframe
-						body={rewriteInlineImages(
-							email.body || "",
-							mailboxId || "",
-							email.id,
-							email.attachments,
-						)}
-						autoSize
-					/>
+					<MessageBody email={email} mailboxId={mailboxId || ""} autoSize />
 				</div>
 
 				{isDraft && (onSendDraft || onEditDraft || onDeleteDraft) && (

@@ -6,6 +6,7 @@ import { Banner, Button, Input } from "@cloudflare/kumo";
 import { FloppyDiskIcon, PaperPlaneTiltIcon, XIcon } from "@phosphor-icons/react";
 import { useParams } from "react-router";
 import { useComposeForm } from "~/hooks/useComposeForm";
+import RecipientInput from "./RecipientInput";
 import RichTextEditor from "./RichTextEditor";
 
 export default function ComposePanel() {
@@ -69,12 +70,12 @@ export default function ComposePanel() {
 								To
 							</label>
 							<div className="flex-1 flex items-center gap-2 min-w-0">
-								<Input
-									type="text"
+								<RecipientInput
+									mailboxId={mailboxId}
 									placeholder="recipient@example.com"
-									size="sm"
 									value={to}
-									onChange={(e) => setTo(e.target.value)}
+									onChange={setTo}
+									label="To"
 									required
 								/>
 								{!showCcBcc && (
@@ -95,11 +96,11 @@ export default function ComposePanel() {
 									CC
 								</label>
 								<div className="flex-1">
-									<Input
-										type="text"
-										size="sm"
+									<RecipientInput
+										mailboxId={mailboxId}
 										value={cc}
-										onChange={(e) => setCc(e.target.value)}
+										onChange={setCc}
+										label="CC"
 										placeholder="Separate multiple addresses with commas"
 									/>
 								</div>
@@ -112,11 +113,11 @@ export default function ComposePanel() {
 									BCC
 								</label>
 								<div className="flex-1">
-									<Input
-										type="text"
-										size="sm"
+									<RecipientInput
+										mailboxId={mailboxId}
 										value={bcc}
-										onChange={(e) => setBcc(e.target.value)}
+										onChange={setBcc}
+										label="BCC"
 										placeholder="Separate multiple addresses with commas"
 									/>
 								</div>

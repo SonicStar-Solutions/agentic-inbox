@@ -18,6 +18,7 @@ import {
 } from "./lib/email-helpers";
 import { SendEmailRequestSchema } from "./lib/schemas";
 import { parseJsonBody } from "./lib/http";
+import { BulkRequestSchema } from "./lib/bulk";
 import { isAllowedDomain, parseDomains } from "./lib/domains";
 import { isAutoDraftEnabled, readMailboxSettings, validateAgentSettings } from "./lib/mailbox-settings";
 import { logRateLimitHit } from "./lib/rate-limit";
@@ -278,6 +279,17 @@ app.delete("/api/v1/mailboxes/:mailboxId/emails/:id", async (c: AppContext) => {
 	return c.body(null, 204);
 });
 
+app.post("/api/v1/mailboxes/:mailboxId/emails/bulk", async (c: AppContext) => {
+	const parsed = await parseJsonBody(c, BulkRequestSchema);
+	if (!parsed.ok) return parsed.response;
+	const result = await (c.var.mailboxStub as any).bulkUpdate(parsed.data);
+	if ("error" in result) return c.json({ error: result.error }, 400);
+	if (result.attachments.length > 0) {
+		await c.env.BUCKET.delete(result.attachments.map((a: any) => `attachments/${a.email_id}/${a.id}/${a.filename}`));
+	}
+	return c.json({ count: result.count });
+});
+
 app.post("/api/v1/mailboxes/:mailboxId/emails/:id/move", async (c: AppContext) => {
 	const { folderId } = (await c.req.json()) as { folderId: string };
 	const success = await c.var.mailboxStub.moveEmail(c.req.param("id")!, folderId);
@@ -341,6 +353,15 @@ app.get("/api/v1/mailboxes/:mailboxId/search", async (c: AppContext) => {
 	const emails = await stub.searchEmails({ ...searchOpts, page: intQuery(c, "page"), limit: intQuery(c, "limit") });
 	const totalCount = await stub.countSearchResults(searchOpts);
 	return c.json({ emails, totalCount });
+});
+
+// -- Contacts (recipient suggestions) ---------------------------------
+
+app.get("/api/v1/mailboxes/:mailboxId/contacts", async (c: AppContext) => {
+	const q = (c.req.query("q") || "").slice(0, 100);
+	const limit = intQuery(c, "limit") ?? 8;
+	const contacts = await (c.var.mailboxStub as any).searchContacts(q, c.req.param("mailboxId"), limit);
+	return c.json({ contacts });
 });
 
 // -- Attachments ----------------------------------------------------
