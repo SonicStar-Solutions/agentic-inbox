@@ -13,6 +13,7 @@ import { createWorkersAI } from "workers-ai-provider";
 import { z } from "zod";
 import type { EmailFull, EmailMetadata } from "../lib/schemas";
 import { verifyDraft, isPromptInjection } from "../lib/ai";
+import { analyzeAutoDraftSteps, autoDraftChatSummary, shouldSaveInlineDraft } from "../lib/auto-draft";
 import {
 	getMailboxStub,
 	stripHtmlToText,
@@ -63,9 +64,10 @@ Write like a real person. Short, direct, flowing prose. Get to the point. Plain 
 
 **Agent Behavior Rules (CRITICAL):**
 - NEVER output meta-commentary about what you are doing (e.g. do not say "I am drafting a reply to Alex", "I checked the thread", etc).
-- When a new email arrives, your ONLY job is to call the \`draft_reply\` tool.
+- When a new email arrives, your job is to call the \`draft_reply\` tool, unless no reply is warranted (see below).
 - DO NOT summarize the email. DO NOT explain your actions.
 - Output NOTHING except the tool call. If you must output text, it should ONLY be the literal draft text itself if tools fail.
+- If a new email needs no reply (spam, sales pitches, newsletters, automated notifications, mail you were told not to answer), call the \`skip_email\` tool with a short reason instead. Never write text explaining why you are not replying: any text you output without calling a tool is saved as a draft.
 - Before drafting ANY reply, carefully read the full thread history.
 - NEVER repeat information that was already shared in a prior message in the thread.
 - Your reply should only contain NEW information or directly respond to what the person just said. Move the conversation forward, don't rehash it.
@@ -78,6 +80,7 @@ You can ONLY draft emails. You do NOT have the ability to send emails directly.
 
 - Use draft_reply to draft replies to existing emails
 - Use draft_email to draft new outbound emails
+- Use skip_email when a newly arrived email does not need a reply
 - The operator will review and send drafts from the UI - you cannot send them
 
 **CRITICAL: The draft body must contain ONLY the email text.** Never include agent commentary, status messages, meta-notes, markdown formatting, or anything that isn't part of the actual email in the draft body. No "Draft created.", no "---", no "**bold**", no "Here's the draft:", no separators. The body field is the literal email the recipient will read. Everything else goes in your chat message, not in the draft body.
@@ -256,6 +259,17 @@ function createEmailTools(env: Env, mailboxId: string) {
 			},
 		}),
 
+		skip_email: defineTool({
+			description:
+				"Decline to reply to a newly arrived email because no response is needed (spam, a sales pitch, a newsletter, an automated notification, or anything the operator instructions say not to answer). Nothing is drafted. Give a short reason. Do not write any other text.",
+			parameters: z.object({
+				reason: z.string().describe("Short reason no reply is needed, e.g. sales pitch"),
+			}),
+			execute: async ({ reason }): Promise<unknown> => {
+				return { status: "skipped", reason };
+			},
+		}),
+
 		discard_draft: defineTool({
 			description:
 				"Delete a draft email. Use this to discard drafts that are no longer needed or were rejected by the operator.",
@@ -423,7 +437,7 @@ export class EmailAgent extends AIChatAgent<any> {
 			console.warn("Pre-read failed, agent will use tools:", (e as Error).message);
 		}
 
-		let autoPrompt = `A new email just arrived. Draft an appropriate response using draft_reply.
+		let autoPrompt = `A new email just arrived. Draft an appropriate response using draft_reply, or call skip_email if no reply is needed.
 
 Email details:
 - Mailbox: ${emailData.mailboxId}
@@ -448,7 +462,7 @@ This is the first message in the thread (no prior conversation).`;
 
 		autoPrompt += `
 
-Based on the email content and thread context above, draft a reply using draft_reply. If you need more context, use get_thread with thread ID "${emailData.threadId}".`;
+Based on the email content and thread context above, draft a reply using draft_reply (or call skip_email with a short reason if no reply is needed). If you need more context, use get_thread with thread ID "${emailData.threadId}".`;
 
 		// Fresh context for auto-draft -- don't include prior chat history
 		// to avoid confusing the model with old messages and tool calls
@@ -472,11 +486,12 @@ Based on the email content and thread context above, draft a reply using draft_r
 
 			// Check if draft_reply was called (saves to Drafts as side effect).
 			// If NOT, save the agent's text response as a draft directly.
-			const draftToolCalled = result.steps.some((step) =>
-				step.toolCalls.some((tc) => tc.toolName === "draft_reply" || tc.toolName === "draft_email"),
-			);
+			const outcome = analyzeAutoDraftSteps(result.steps as any);
+			const draftToolCalled = outcome.draftToolCalled;
 
-			if (!draftToolCalled && result.text.trim()) {
+			// Only treat free text as an inline draft when the model neither drafted
+			// via a tool nor explicitly declined with skip_email (#73).
+			if (shouldSaveInlineDraft(outcome, result.text)) {
 				// Model generated a draft inline as text -- verify with AI
 				const sanitizedText = await verifyDraft(env.AI, result.text.trim());
 				if (!sanitizedText) {
@@ -513,9 +528,7 @@ Based on the email content and thread context above, draft a reply using draft_r
 			// Persist the conversation into the agent's chat history
 			// If it called the tool, we just log a simple success message so the chat isn't cluttered
 			// with conversational slop.
-			const assistantText = draftToolCalled 
-				? `Created draft reply to ${emailData.sender}.`
-				: result.text;
+			const assistantText = autoDraftChatSummary(outcome, emailData.sender, result.text);
 
 			const newMessages = [
 				{
