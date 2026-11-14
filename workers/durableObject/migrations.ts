@@ -185,4 +185,24 @@ export const mailboxMigrations: Migration[] = [
             CREATE INDEX IF NOT EXISTS idx_scheduled_due ON scheduled_emails(status, send_at);
         `,
 	},
+	{
+		// Labels (#89). Idempotent, so no transaction wrapper.
+		name: "10_labels",
+		sql: `
+            CREATE TABLE IF NOT EXISTS labels (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                color TEXT NOT NULL DEFAULT 'slate',
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS email_labels (
+                email_id TEXT NOT NULL,
+                label_id TEXT NOT NULL,
+                PRIMARY KEY (email_id, label_id),
+                FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE,
+                FOREIGN KEY (label_id) REFERENCES labels(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_email_labels_label ON email_labels(label_id);
+        `,
+	},
 ];

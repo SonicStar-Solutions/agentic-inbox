@@ -18,6 +18,7 @@ import { aliasesOf } from "../lib/aliases";
 import { readMailboxSettings } from "../lib/mailbox-settings";
 import type { ScheduleRequest, ScheduledEmailSummary } from "../lib/scheduled";
 import type { EmailFull } from "../lib/schemas";
+import { attachLabels, labelIdFromName, MAX_LABELS, type Label, type LabelColor, type LabelWithCount } from "../lib/labels";
 import { buildBulkWhere, type BulkRequest } from "../lib/bulk";
 import { buildContacts, type Contact, type ContactSource } from "../lib/contacts";
 
@@ -1086,6 +1087,123 @@ export class MailboxDO extends DurableObject<Env> {
 		return attachments;
 	}
 
+	// ── Labels ─────────────────────────────────────────────────────
+
+	async listLabels(): Promise<LabelWithCount[]> {
+		const rows = [
+			...this.ctx.storage.sql.exec(
+				`SELECT l.id, l.name, l.color,
+				        (SELECT COUNT(*) FROM email_labels el JOIN emails e ON e.id = el.email_id
+				          WHERE el.label_id = l.id AND e.folder_id != 'trash') AS count
+				 FROM labels l ORDER BY l.name COLLATE NOCASE ASC`,
+			),
+		] as any[];
+		return rows.map((r) => ({ id: r.id, name: r.name, color: r.color, count: Number(r.count) }));
+	}
+
+	async createLabel(name: string, color: LabelColor): Promise<Label | { error: string }> {
+		const sql = this.ctx.storage.sql;
+		const total = Number(([...sql.exec(`SELECT COUNT(*) AS n FROM labels`)][0] as { n: number }).n);
+		if (total >= MAX_LABELS) return { error: `A mailbox can have at most ${MAX_LABELS} labels` };
+		if ([...sql.exec(`SELECT 1 FROM labels WHERE name = ?`, name)].length > 0) {
+			return { error: "A label with this name already exists" };
+		}
+		// Two different names can slug to the same id ("A b" and "a-b"); add a suffix.
+		const base = labelIdFromName(name);
+		let id = base;
+		for (let i = 2; [...sql.exec(`SELECT 1 FROM labels WHERE id = ?`, id)].length > 0; i++) id = `${base}-${i}`;
+		sql.exec(`INSERT INTO labels (id, name, color, created_at) VALUES (?, ?, ?, ?)`, id, name, color, new Date().toISOString());
+		this.#notify("all");
+		return { id, name, color };
+	}
+
+	async updateLabel(id: string, patch: { name?: string; color?: LabelColor }): Promise<Label | { error: string } | null> {
+		const sql = this.ctx.storage.sql;
+		const current = [...sql.exec(`SELECT id, name, color FROM labels WHERE id = ?`, id)][0] as unknown as Label | undefined;
+		if (!current) return null;
+		if (patch.name !== undefined && patch.name.toLowerCase() !== current.name.toLowerCase()) {
+			if ([...sql.exec(`SELECT 1 FROM labels WHERE name = ? AND id != ?`, patch.name, id)].length > 0) {
+				return { error: "A label with this name already exists" };
+			}
+		}
+		const next = { id, name: patch.name ?? current.name, color: (patch.color ?? current.color) as LabelColor };
+		sql.exec(`UPDATE labels SET name = ?, color = ? WHERE id = ?`, next.name, next.color, id);
+		this.#notify("all");
+		return next;
+	}
+
+	async deleteLabel(id: string): Promise<boolean> {
+		const sql = this.ctx.storage.sql;
+		if ([...sql.exec(`SELECT 1 FROM labels WHERE id = ?`, id)].length === 0) return false;
+		sql.exec(`DELETE FROM email_labels WHERE label_id = ?`, id);
+		sql.exec(`DELETE FROM labels WHERE id = ?`, id);
+		this.#notify("all");
+		return true;
+	}
+
+	/** Attach `labels` to list rows (by message, and by thread for conversation rows). */
+	async withLabels<T extends { id: string; thread_id?: string | null }>(rows: T[]): Promise<(T & { labels: Label[] })[]> {
+		if (rows.length === 0) return [];
+		const sql = this.ctx.storage.sql;
+		const byEmail = new Map<string, Label[]>();
+		const byThread = new Map<string, Label[]>();
+		const push = (map: Map<string, Label[]>, key: string, label: Label) => {
+			const list = map.get(key) ?? [];
+			if (!list.some((l) => l.id === label.id)) list.push(label);
+			map.set(key, list);
+		};
+
+		const ids = [...new Set(rows.map((r) => r.id))];
+		const threadIds = [...new Set(rows.map((r) => r.thread_id).filter((t): t is string => !!t))];
+		for (let i = 0; i < ids.length; i += 100) {
+			const chunk = ids.slice(i, i + 100);
+			const found = [
+				...sql.exec(
+					`SELECT el.email_id AS k, l.id, l.name, l.color FROM email_labels el JOIN labels l ON l.id = el.label_id
+					 WHERE el.email_id IN (${chunk.map(() => "?").join(", ")}) ORDER BY l.name COLLATE NOCASE`,
+					...chunk,
+				),
+			] as any[];
+			for (const r of found) push(byEmail, r.k, { id: r.id, name: r.name, color: r.color });
+		}
+		for (let i = 0; i < threadIds.length; i += 100) {
+			const chunk = threadIds.slice(i, i + 100);
+			const found = [
+				...sql.exec(
+					`SELECT DISTINCT e.thread_id AS k, l.id, l.name, l.color FROM email_labels el
+					 JOIN emails e ON e.id = el.email_id JOIN labels l ON l.id = el.label_id
+					 WHERE e.thread_id IN (${chunk.map(() => "?").join(", ")}) ORDER BY l.name COLLATE NOCASE`,
+					...chunk,
+				),
+			] as any[];
+			for (const r of found) push(byThread, r.k, { id: r.id, name: r.name, color: r.color });
+		}
+		return attachLabels(rows, byEmail, byThread);
+	}
+
+	/** Messages carrying a label, newest first (Trash excluded). */
+	async getEmailsByLabel(labelId: string, page = 1, limit = 25) {
+		const sql = this.ctx.storage.sql;
+		const size = Math.min(Math.max(limit, 1), 100);
+		const offset = (Math.max(page, 1) - 1) * size;
+		const emails = [
+			...sql.exec(
+				`SELECT e.id, e.subject, e.sender, e.recipient, e.cc, e.bcc, e.date, e.read, e.starred,
+				        e.in_reply_to, e.email_references, e.thread_id, e.folder_id, SUBSTR(e.body, 1, 300) AS snippet
+				 FROM emails e JOIN email_labels el ON el.email_id = e.id
+				 WHERE el.label_id = ? AND e.folder_id != 'trash'
+				 ORDER BY e.date DESC LIMIT ? OFFSET ?`,
+				labelId,
+				size,
+				offset,
+			),
+		] as any[];
+		const totalCount = Number(
+			([...sql.exec(`SELECT COUNT(*) AS n FROM email_labels el JOIN emails e ON e.id = el.email_id WHERE el.label_id = ? AND e.folder_id != 'trash'`, labelId)][0] as { n: number }).n,
+		);
+		return { emails, totalCount };
+	}
+
 	// ── Bulk actions ───────────────────────────────────────────────
 
 	async bulkUpdate(req: BulkRequest): Promise<
@@ -1116,6 +1234,18 @@ export class MailboxDO extends DurableObject<Env> {
 				if (!folder) return { error: "Folder not found" };
 				const count = matched();
 				sql.exec(`UPDATE emails SET folder_id = ? WHERE ${where}`, folder.id, ...params);
+				return { count, attachments: [] };
+			}
+			case "label":
+			case "unlabel": {
+				const label = [...sql.exec(`SELECT id FROM labels WHERE id = ?`, req.labelId!)][0] as { id: string } | undefined;
+				if (!label) return { error: "Label not found" };
+				const count = matched();
+				if (req.action === "label") {
+					sql.exec(`INSERT OR IGNORE INTO email_labels (email_id, label_id) SELECT id, ? FROM emails WHERE ${where}`, label.id, ...params);
+				} else {
+					sql.exec(`DELETE FROM email_labels WHERE label_id = ? AND email_id IN (SELECT id FROM emails WHERE ${where})`, label.id, ...params);
+				}
 				return { count, attachments: [] };
 			}
 			case "delete": {

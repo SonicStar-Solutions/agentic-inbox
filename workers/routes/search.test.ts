@@ -10,6 +10,7 @@ function searchEnv() {
 	const stub: any = makeFakeMailboxStub();
 	stub.searchEmails = async () => [];
 	stub.countSearchResults = async () => 0;
+	stub.withLabels = async (rows: any[]) => rows.map((r) => ({ ...r, labels: [] }));
 	return makeFakeEnv({ stubs: { "alice@example.com": stub } });
 }
 

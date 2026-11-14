@@ -19,6 +19,7 @@ import {
 import { SendEmailRequestSchema } from "./lib/schemas";
 import { parseJsonBody } from "./lib/http";
 import { BulkRequestSchema } from "./lib/bulk";
+import { LabelInputSchema, LabelUpdateSchema } from "./lib/labels";
 import { ScheduleRequestSchema, validateSendAt } from "./lib/scheduled";
 import { aliasesOf, resolveAlias, syncAliasIndex, validateAliases } from "./lib/aliases";
 import { isAllowedDomain, parseDomains } from "./lib/domains";
@@ -186,16 +187,21 @@ app.get("/api/v1/mailboxes/:mailboxId/emails", async (c: AppContext) => {
 	const sortColumn = c.req.query("sortColumn") as any;
 	const sortDirection = c.req.query("sortDirection") as "ASC" | "DESC" | undefined;
 	const stub = c.var.mailboxStub;
+	const label = c.req.query("label");
 
+	if (label) {
+		const found = await (stub as any).getEmailsByLabel(label, page, limit);
+		return c.json({ emails: await (stub as any).withLabels(found.emails), totalCount: found.totalCount });
+	}
 	if (threaded && folder) {
 		const emails = await (stub as any).getThreadedEmails({ folder, page, limit });
 		const totalCount = await (stub as any).countThreadedEmails(folder);
-		return c.json({ emails, totalCount });
+		return c.json({ emails: await (stub as any).withLabels(emails), totalCount });
 	}
 	const emails = await stub.getEmails({ folder, thread_id, page, limit, sortColumn, sortDirection });
 	if (folder) {
 		const totalCount = await stub.countEmails({ folder, thread_id });
-		return c.json({ emails, totalCount });
+		return c.json({ emails: await (stub as any).withLabels(emails), totalCount });
 	}
 	return c.json(emails);
 });
@@ -408,7 +414,35 @@ app.get("/api/v1/mailboxes/:mailboxId/search", async (c: AppContext) => {
 	const stub = c.var.mailboxStub as any;
 	const emails = await stub.searchEmails({ ...searchOpts, page: intQuery(c, "page"), limit: intQuery(c, "limit") });
 	const totalCount = await stub.countSearchResults(searchOpts);
-	return c.json({ emails, totalCount });
+	return c.json({ emails: await stub.withLabels(emails), totalCount });
+});
+
+// -- Labels -------------------------------------------------------------
+
+app.get("/api/v1/mailboxes/:mailboxId/labels", async (c: AppContext) => {
+	return c.json({ labels: await (c.var.mailboxStub as any).listLabels() });
+});
+
+app.post("/api/v1/mailboxes/:mailboxId/labels", async (c: AppContext) => {
+	const parsed = await parseJsonBody(c, LabelInputSchema);
+	if (!parsed.ok) return parsed.response;
+	const result = await (c.var.mailboxStub as any).createLabel(parsed.data.name, parsed.data.color);
+	if ("error" in result) return c.json({ error: result.error }, 409);
+	return c.json(result, 201);
+});
+
+app.put("/api/v1/mailboxes/:mailboxId/labels/:id", async (c: AppContext) => {
+	const parsed = await parseJsonBody(c, LabelUpdateSchema);
+	if (!parsed.ok) return parsed.response;
+	const result = await (c.var.mailboxStub as any).updateLabel(c.req.param("id")!, parsed.data);
+	if (result === null) return c.json({ error: "Label not found" }, 404);
+	if ("error" in result) return c.json({ error: result.error }, 409);
+	return c.json(result);
+});
+
+app.delete("/api/v1/mailboxes/:mailboxId/labels/:id", async (c: AppContext) => {
+	const ok = await (c.var.mailboxStub as any).deleteLabel(c.req.param("id")!);
+	return ok ? c.body(null, 204) : c.json({ error: "Label not found" }, 404);
 });
 
 // -- Live updates (WebSocket) -----------------------------------------
