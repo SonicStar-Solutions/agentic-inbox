@@ -18,6 +18,7 @@ import {
 } from "./lib/email-helpers";
 import { SendEmailRequestSchema } from "./lib/schemas";
 import { parseJsonBody } from "./lib/http";
+import { findOverlongSearchTerm, MAX_SEARCH_TERM_LENGTH } from "./lib/search";
 import { handleReplyEmail, handleForwardEmail } from "./routes/reply-forward";
 import { Folders } from "../shared/folders";
 import type { Env } from "./types";
@@ -319,6 +320,11 @@ app.get("/api/v1/mailboxes/:mailboxId/search", async (c: AppContext) => {
 		date_end: c.req.query("date_end"), is_read: boolQuery(c, "is_read"),
 		is_starred: boolQuery(c, "is_starred"), has_attachment: boolQuery(c, "has_attachment"),
 	};
+	const overlong = findOverlongSearchTerm({
+		query: searchOpts.query as string, from: searchOpts.from as string | undefined,
+		to: searchOpts.to as string | undefined, subject: searchOpts.subject as string | undefined,
+	});
+	if (overlong) return c.json({ error: `Search parameter "${overlong}" is too long (max ${MAX_SEARCH_TERM_LENGTH} characters)` }, 400);
 	const stub = c.var.mailboxStub as any;
 	const emails = await stub.searchEmails({ ...searchOpts, page: intQuery(c, "page"), limit: intQuery(c, "limit") });
 	const totalCount = await stub.countSearchResults(searchOpts);
