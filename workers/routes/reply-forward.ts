@@ -79,7 +79,9 @@ export async function handleReplyEmail(c: AppContext) {
 		outgoingMessageId,
 	);
 	if (!delivery.ok) return delivery.response;
-	const sentMessageId = outgoingMessageId;
+	// Provider-assigned Message-ID (#83): what recipients actually receive, so
+	// later replies thread against a message they really have.
+	const sentMessageId = delivery.messageId;
 
 	try {
 		const attachmentData = await storeAttachments(c.env.BUCKET, messageId, attachments);
@@ -178,7 +180,9 @@ export async function handleForwardEmail(c: AppContext) {
 		outgoingMessageId,
 	);
 	if (!delivery.ok) return delivery.response;
-	const sentMessageId = outgoingMessageId;
+	// Provider-assigned Message-ID (#83): what recipients actually receive, so
+	// later replies thread against a message they really have.
+	const sentMessageId = delivery.messageId;
 
 	try {
 		const attachmentData = await storeAttachments(c.env.BUCKET, messageId, attachments);

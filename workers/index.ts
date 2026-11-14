@@ -194,8 +194,9 @@ app.post("/api/v1/mailboxes/:mailboxId/emails", async (c: AppContext) => {
 		...(in_reply_to ? { headers: buildThreadingHeaders(in_reply_to, references || []) } : {}),
 	}, outgoingMessageId);
 	if (!delivery.ok) return delivery.response;
-	// replies thread against a message the recipient really has.
-	const sentMessageId = outgoingMessageId;
+	// Provider-assigned Message-ID (#83): what recipients actually receive, so
+	// later replies thread against a message they really have.
+	const sentMessageId = delivery.messageId;
 
 	try {
 		const attachmentData = await storeAttachments(c.env.BUCKET, messageId, attachments);
