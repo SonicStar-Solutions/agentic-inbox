@@ -133,3 +133,23 @@ export const jsonPost = (body: unknown): RequestInit => ({
 	headers: { "Content-Type": "application/json" },
 	body: typeof body === "string" ? body : JSON.stringify(body),
 });
+
+/** Build the argument `receiveEmail` expects from a raw RFC 822 string. */
+export function rawEmailEvent(raw: string, envelopeTo?: string, envelopeFrom = "sender@example.net") {
+	const bytes = new TextEncoder().encode(raw);
+	return {
+		raw: new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(bytes);
+				controller.close();
+			},
+		}),
+		rawSize: bytes.byteLength,
+		to: envelopeTo as string,
+		from: envelopeFrom,
+	};
+}
+
+export function rfc822(headers: Record<string, string>, body = "hello") {
+	return Object.entries(headers).map(([k, v]) => `${k}: ${v}`).join("\r\n") + "\r\n\r\n" + body;
+}

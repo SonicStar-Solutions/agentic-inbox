@@ -10,6 +10,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
 	test: {
 		environment: "node",
+		setupFiles: ["./workers/test-setup.ts"],
 		include: ["workers/**/*.test.ts", "shared/**/*.test.ts", "app/**/*.test.ts"],
 	},
 });

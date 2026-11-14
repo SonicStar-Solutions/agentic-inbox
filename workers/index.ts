@@ -5,6 +5,7 @@
 import { type Context, Hono } from "hono";
 import { cors } from "hono/cors";
 import PostalMime from "postal-mime";
+import { getAgentByName } from "agents";
 import { z } from "zod";
 import { deliverEmail } from "./lib/send";
 import { storeAttachments, type StoredAttachment } from "./lib/attachments";
@@ -417,11 +418,21 @@ async function receiveEmail(event: { raw: ReadableStream; rawSize: number }, env
 		thread_id: threadId, message_id: originalMessageId, raw_headers: JSON.stringify(parsedEmail.headers),
 	}, attachmentData);
 
-	const agentStub = env.EMAIL_AGENT.get(env.EMAIL_AGENT.idFromName(mailboxId));
-	ctx.waitUntil(agentStub.fetch(new Request("https://agents/onNewEmail", {
-		method: "POST", headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ mailboxId, emailId: messageId, sender: (parsedEmail.from?.address || "").toLowerCase(), subject: parsedEmail.subject || "", threadId }),
-	})).catch((e) => console.error("Auto-draft trigger failed:", (e as Error).message)));
+	// Resolve the agent through the SDK: getAgentByName performs the set-name
+	// handshake, which a bare idFromName()/get() stub skips. Without it, an agent
+	// instance that was never opened in the UI throws "Missing namespace or room
+	// headers" and auto-draft silently never runs (#57).
+	ctx.waitUntil(
+		getAgentByName(env.EMAIL_AGENT, mailboxId)
+			.then((agentStub) => agentStub.fetch(new Request("https://agents/onNewEmail", {
+				method: "POST", headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ mailboxId, emailId: messageId, sender: (parsedEmail.from?.address || "").toLowerCase(), subject: parsedEmail.subject || "", threadId }),
+			})))
+			.then((res) => {
+				if (!res.ok) console.error(`Auto-draft trigger failed for ${mailboxId}: HTTP ${res.status}`);
+			})
+			.catch((e) => console.error(`Auto-draft trigger failed for ${mailboxId}:`, (e as Error).message)),
+	);
 }
 
 export { app, receiveEmail };
