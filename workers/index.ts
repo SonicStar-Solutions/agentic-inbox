@@ -411,6 +411,15 @@ app.get("/api/v1/mailboxes/:mailboxId/search", async (c: AppContext) => {
 	return c.json({ emails, totalCount });
 });
 
+// -- Live updates (WebSocket) -----------------------------------------
+
+app.get("/api/v1/mailboxes/:mailboxId/events", async (c: AppContext) => {
+	if (c.req.header("Upgrade")?.toLowerCase() !== "websocket") {
+		return c.text("Expected a WebSocket upgrade", 426);
+	}
+	return c.var.mailboxStub.fetch(c.req.raw);
+});
+
 // -- Contacts (recipient suggestions) ---------------------------------
 
 app.get("/api/v1/mailboxes/:mailboxId/contacts", async (c: AppContext) => {

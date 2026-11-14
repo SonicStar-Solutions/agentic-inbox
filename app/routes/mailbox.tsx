@@ -10,6 +10,7 @@ import AgentSidebar from "~/components/AgentSidebar";
 import ShortcutsDialog from "~/components/ShortcutsDialog";
 import UndoSendBar from "~/components/UndoSendBar";
 import { useGlobalShortcuts } from "~/hooks/useGlobalShortcuts";
+import { useLiveUpdates } from "~/hooks/useLiveUpdates";
 import Header from "~/components/Header";
 import Sidebar from "~/components/Sidebar";
 import { useMailbox } from "~/queries/mailboxes";
@@ -30,6 +31,7 @@ export default function MailboxRoute() {
 	} = useUIStore();
 
 	useGlobalShortcuts();
+	useLiveUpdates(mailboxId);
 
 	useEffect(() => {
 		if (

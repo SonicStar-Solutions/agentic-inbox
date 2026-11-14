@@ -120,6 +120,50 @@ export class MailboxDO extends DurableObject<Env> {
 		this.#fts = this.#setupFts();
 	}
 
+	// ── Live updates (#89) ─────────────────────────────────────────
+
+	/** Browsers connect here (via /api/v1/mailboxes/:id/events) to hear about changes. */
+	async fetch(request: Request): Promise<Response> {
+		if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
+			return new Response("Expected a WebSocket upgrade", { status: 426 });
+		}
+		const pair = new WebSocketPair();
+		// Hibernation API: the object can be evicted while sockets stay connected.
+		this.ctx.acceptWebSocket(pair[1]);
+		return new Response(null, { status: 101, webSocket: pair[0] });
+	}
+
+	async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+		// Keep-alive from the client
+		if (message === "ping") ws.send("pong");
+	}
+
+	async webSocketClose(ws: WebSocket, code: number): Promise<void> {
+		try {
+			ws.close(code === 1005 ? 1000 : code);
+		} catch {
+			// already closed
+		}
+	}
+
+	/** Tell connected browsers that something changed so they refetch. Never throws. */
+	#notify(scope: "emails" | "folders" | "scheduled" | "all"): void {
+		try {
+			const sockets = this.ctx.getWebSockets();
+			if (sockets.length === 0) return;
+			const message = JSON.stringify({ type: "changed", scope });
+			for (const ws of sockets) {
+				try {
+					ws.send(message);
+				} catch {
+					// a socket that just closed
+				}
+			}
+		} catch {
+			// notifications are best effort
+		}
+	}
+
 	/** True when the FTS5 index exists and search can use it (#89). */
 	#fts = false;
 
@@ -540,6 +584,7 @@ export class MailboxDO extends DurableObject<Env> {
 		id: string,
 		{ read, starred }: { read?: boolean; starred?: boolean },
 	) {
+		this.#notify("emails");
 		const data: { read?: number; starred?: number } = {};
 		if (read !== undefined) {
 			data.read = read ? 1 : 0;
@@ -562,6 +607,7 @@ export class MailboxDO extends DurableObject<Env> {
 	}
 
 	async markThreadRead(threadId: string) {
+		this.#notify("emails");
 		this.ctx.storage.sql.exec(
 			`UPDATE emails SET read = 1 WHERE thread_id = ? AND read = 0`,
 			threadId,
@@ -570,6 +616,7 @@ export class MailboxDO extends DurableObject<Env> {
 	}
 
 	async deleteEmail(id: string) {
+		this.#notify("emails");
 		const email = this.db
 			.select({ id: schema.emails.id })
 			.from(schema.emails)
@@ -622,6 +669,7 @@ export class MailboxDO extends DurableObject<Env> {
 	}
 
 	async createFolder(id: string, name: string, is_deletable: number = 1) {
+		this.#notify("folders");
 		try {
 			const result = this.db
 				.insert(schema.folders)
@@ -638,6 +686,7 @@ export class MailboxDO extends DurableObject<Env> {
 	}
 
 	async updateFolder(id: string, name: string) {
+		this.#notify("folders");
 		// Only custom folders can be renamed; Inbox, Sent, etc. keep their names (#89).
 		const existing = this.db
 			.select({ is_deletable: schema.folders.is_deletable })
@@ -656,6 +705,7 @@ export class MailboxDO extends DurableObject<Env> {
 	}
 
 	async deleteFolder(id: string) {
+		this.#notify("all");
 		const folder = this.db
 			.select({ is_deletable: schema.folders.is_deletable })
 			.from(schema.folders)
@@ -679,6 +729,7 @@ export class MailboxDO extends DurableObject<Env> {
 	}
 
 	async moveEmail(id: string, folderId: string) {
+		this.#notify("emails");
 		const folder = this.db
 			.select({ id: schema.folders.id })
 			.from(schema.folders)
@@ -869,6 +920,7 @@ export class MailboxDO extends DurableObject<Env> {
 	// ── Scheduled sends ("send later") ─────────────────────────────
 
 	async scheduleEmail(item: { id: string; mailboxId: string; request: ScheduleRequest; sendAt: string }): Promise<string> {
+		this.#notify("scheduled");
 		this.ctx.storage.sql.exec(
 			`INSERT INTO scheduled_emails (id, kind, original_email_id, payload, send_at, status, updated_at)
 			 VALUES (?, ?, ?, ?, ?, 'pending', ?)`,
@@ -905,6 +957,7 @@ export class MailboxDO extends DurableObject<Env> {
 
 	/** Cancel a scheduled message. A message that is mid-send can't be cancelled. */
 	async cancelScheduled(id: string): Promise<boolean> {
+		this.#notify("scheduled");
 		const row = [...this.ctx.storage.sql.exec(`SELECT status FROM scheduled_emails WHERE id = ?`, id)][0] as { status: string } | undefined;
 		if (!row || row.status === "sending") return false;
 		this.ctx.storage.sql.exec(`DELETE FROM scheduled_emails WHERE id = ?`, id);
@@ -955,6 +1008,7 @@ export class MailboxDO extends DurableObject<Env> {
 				sql.exec(`UPDATE scheduled_emails SET status = 'failed', error = ?, updated_at = ? WHERE id = ?`, message, new Date().toISOString(), row.id);
 			}
 		}
+		if (due.length > 0) this.#notify("scheduled");
 	}
 
 	/** Send one scheduled message and file it in Sent (compose or reply). Throws on failure. */
@@ -1022,6 +1076,7 @@ export class MailboxDO extends DurableObject<Env> {
 	 * the same address can be created again.
 	 */
 	async purgeAll(): Promise<{ email_id: string; id: string; filename: string }[]> {
+		this.#notify("all");
 		const attachments = [
 			...this.ctx.storage.sql.exec(`SELECT email_id, id, filename FROM attachments`),
 		] as unknown as { email_id: string; id: string; filename: string }[];
@@ -1036,6 +1091,7 @@ export class MailboxDO extends DurableObject<Env> {
 	async bulkUpdate(req: BulkRequest): Promise<
 		{ count: number; attachments: { email_id: string; id: string; filename: string }[] } | { error: string }
 	> {
+		this.#notify("emails");
 		const { where, params } = buildBulkWhere(req);
 		const sql = this.ctx.storage.sql;
 		// rowsWritten also counts index writes, so count the matched rows instead.
@@ -1126,6 +1182,7 @@ export class MailboxDO extends DurableObject<Env> {
 		email: EmailData,
 		attachments: AttachmentData[],
 	) {
+		this.#notify("emails");
 		// Resolve folder name or ID to the actual folder ID.
 		const folderRow = this.db
 			.select({ id: schema.folders.id })
