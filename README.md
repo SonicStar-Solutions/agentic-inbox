@@ -52,6 +52,7 @@ https://github.com/cloudflare/agentic-inbox/issues/4#issuecomment-4269118513
 - **Per-mailbox isolation** — Each mailbox runs in its own Durable Object with SQLite storage and R2 for attachments
 - **Built-in AI agent** — Side panel with 9 email tools for reading, searching, drafting, and sending
 - **Auto-draft on new email** — Agent automatically reads inbound emails and generates draft replies, always requiring explicit confirmation before sending
+- **Everyday client features** — Labels, bulk actions, keyboard shortcuts (press ?), dark mode, undo send, send later (a Scheduled page), recipient autocomplete, aliases with a From picker, full-text search grouped by conversation, folder rename/delete, remote images blocked by default, quoted-text folding, link warnings, PDF preview, and live updates
 - **Configurable and persistent** — Custom system prompts per mailbox, persistent chat history, streaming markdown responses, and tool call visibility
 
 ## Stack
@@ -104,6 +105,12 @@ curl -H "$H1" -H "$H2" -H "Content-Type: application/json"   -d '{"to":"you@exam
 ```
 
 A rejected send returns `502` with the provider error, and a rate-limited one returns `429`. The `/mcp` endpoint accepts the same headers. As with the web app, a valid token can reach every mailbox.
+
+### Aliases and sending later
+
+- **Aliases:** add extra addresses in Settings, on one of your `DOMAINS`. Also route each alias to this Worker in Email Routing (a catch-all rule already does). Mail to an alias lands in the owning mailbox, and the composer gets a From picker.
+- **Send later:** scheduled messages are sent by a Durable Object alarm, so they go out even with the browser closed. They can't have attachments yet. Pending and failed items are on the Scheduled page.
+- **Undo send:** a sent message is held for 8 seconds in the browser. Closing the tab in that window cancels it (the tab asks first).
 
 ### AI models
 
