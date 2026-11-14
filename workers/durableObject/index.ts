@@ -13,6 +13,8 @@ import { applyMigrations, mailboxMigrations } from "./migrations";
 import { splitLikeTerm } from "../lib/search";
 import { buildReferencesChain, buildThreadingHeaders, generateMessageId, resolveOriginalEmail, validateSender } from "../lib/email-helpers";
 import { deliverRaw } from "../lib/send";
+import { aliasesOf } from "../lib/aliases";
+import { readMailboxSettings } from "../lib/mailbox-settings";
 import type { ScheduleRequest, ScheduledEmailSummary } from "../lib/scheduled";
 import type { EmailFull } from "../lib/schemas";
 import { buildBulkWhere, type BulkRequest } from "../lib/bulk";
@@ -914,7 +916,8 @@ export class MailboxDO extends DurableObject<Env> {
 	/** Send one scheduled message and file it in Sent (compose or reply). Throws on failure. */
 	async #sendScheduled(mailboxId: string, request: ScheduleRequest): Promise<void> {
 		const { to, cc, bcc, from, subject, html, text } = request.email;
-		const { toStr, fromEmail, fromDomain } = validateSender(to, from, mailboxId);
+		const aliases = aliasesOf(await readMailboxSettings(this.env.BUCKET, mailboxId));
+		const { toStr, fromEmail, fromDomain } = validateSender(to, from, mailboxId, aliases);
 
 		const rateLimitError = await this.checkSendRateLimit();
 		if (rateLimitError) throw new Error(rateLimitError);

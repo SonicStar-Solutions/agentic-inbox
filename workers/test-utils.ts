@@ -86,12 +86,22 @@ export function makeFakeEnv(opts: {
 			async get(key: string) {
 				if (!objects.has(key)) return null;
 				const value = objects.get(key);
-				return { body: value, json: async () => (value && typeof value === "object" ? value : {}) };
+				return {
+					body: value,
+					json: async () => {
+						if (typeof value === "string") {
+							try { return JSON.parse(value); } catch { return {}; }
+						}
+						return value && typeof value === "object" ? value : {};
+					},
+				};
 			},
 			async put(key: string, value: unknown) {
 				objects.set(key, value);
 			},
-			async delete(_keys: string | string[]) {},
+			async delete(keys: string | string[]) {
+				for (const k of [keys].flat()) objects.delete(k);
+			},
 		},
 		MAILBOX: {
 			idFromName: (name: string) => name,

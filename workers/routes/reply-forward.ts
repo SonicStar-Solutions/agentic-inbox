@@ -16,6 +16,8 @@ import {
 } from "../lib/email-helpers";
 import { SendEmailRequestSchema } from "../lib/schemas";
 import { parseJsonBody } from "../lib/http";
+import { aliasesOf } from "../lib/aliases";
+import { readMailboxSettings } from "../lib/mailbox-settings";
 import { logRateLimitHit } from "../lib/rate-limit";
 import { Folders } from "../../shared/folders";
 import type { MailboxContext } from "../lib/mailbox";
@@ -42,7 +44,7 @@ export async function handleReplyEmail(c: AppContext) {
 
 	let toStr: string, fromEmail: string, fromDomain: string;
 	try {
-		({ toStr, fromEmail, fromDomain } = validateSender(to, from, mailboxId));
+		({ toStr, fromEmail, fromDomain } = validateSender(to, from, mailboxId, aliasesOf(await readMailboxSettings(c.env.BUCKET, mailboxId))));
 	} catch (e) {
 		if (e instanceof SenderValidationError) return c.json({ error: e.message }, 400);
 		throw e;
@@ -145,7 +147,7 @@ export async function handleForwardEmail(c: AppContext) {
 
 	let toStr: string, fromEmail: string, fromDomain: string;
 	try {
-		({ toStr, fromEmail, fromDomain } = validateSender(to, from, mailboxId));
+		({ toStr, fromEmail, fromDomain } = validateSender(to, from, mailboxId, aliasesOf(await readMailboxSettings(c.env.BUCKET, mailboxId))));
 	} catch (e) {
 		if (e instanceof SenderValidationError) return c.json({ error: e.message }, 400);
 		throw e;
