@@ -15,10 +15,11 @@ import {
 	TrayIcon,
 } from "@phosphor-icons/react";
 import { useMemo, useState } from "react";
+import { useKumoToastManager } from "@cloudflare/kumo";
 import { NavLink, useNavigate, useParams } from "react-router";
 import { ClockIcon } from "@phosphor-icons/react";
 import { Folders, SYSTEM_FOLDER_IDS } from "shared/folders";
-import { useCreateFolder, useFolders } from "~/queries/folders";
+import { useCreateFolder, useDeleteFolder, useFolders, useUpdateFolder } from "~/queries/folders";
 import { useMailbox } from "~/queries/mailboxes";
 import { useScheduled } from "~/queries/scheduled";
 import { useUIStore } from "~/hooks/useUIStore";
@@ -96,6 +97,39 @@ export default function Sidebar() {
 	const getUnreadCount = (folderId: string) => {
 		const found = folders.find((f) => f.id === folderId);
 		return found?.unreadCount || 0;
+	};
+
+	// Rename / delete a custom folder (#89)
+	const toastManager = useKumoToastManager();
+	const updateFolderMutation = useUpdateFolder();
+	const deleteFolderMutation = useDeleteFolder();
+	const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
+	const [renameValue, setRenameValue] = useState("");
+	const [deleting, setDeleting] = useState<{ id: string; name: string } | null>(null);
+
+	const handleRenameFolder = (e: React.FormEvent) => {
+		e.preventDefault();
+		const name = renameValue.trim();
+		if (!renaming || !mailboxId || !name) return;
+		updateFolderMutation.mutate(
+			{ mailboxId, id: renaming.id, name },
+			{ onSuccess: () => setRenaming(null) },
+		);
+	};
+
+	const handleDeleteFolder = () => {
+		if (!deleting || !mailboxId) return;
+		const wasViewing = location.pathname.endsWith(`/emails/${deleting.id}`);
+		deleteFolderMutation.mutate(
+			{ mailboxId, id: deleting.id },
+			{
+				onSuccess: () => {
+					toastManager.add({ title: `"${deleting.name}" deleted. Its messages were moved to Archive.` });
+					setDeleting(null);
+					if (wasViewing) navigate(`/mailbox/${mailboxId}/emails/inbox`);
+				},
+			},
+		);
 	};
 
 	const handleCreateFolder = (e: React.FormEvent) => {
@@ -201,14 +235,36 @@ export default function Sidebar() {
 							</Tooltip>
 						</div>
 						{customFolders.map((folder) => (
-							<FolderLink
-								key={folder.id}
-								to={`/mailbox/${mailboxId}/emails/${folder.id}`}
-								icon={<FolderIcon size={18} />}
-								label={folder.name}
-								unreadCount={folder.unreadCount}
-								onClick={handleNavClick}
-							/>
+							<div key={folder.id} className="group/folder relative">
+								<FolderLink
+									to={`/mailbox/${mailboxId}/emails/${folder.id}`}
+									icon={<FolderIcon size={18} />}
+									label={folder.name}
+									unreadCount={folder.unreadCount}
+									onClick={handleNavClick}
+								/>
+								<div className="absolute right-1 top-1/2 hidden -translate-y-1/2 items-center gap-0.5 bg-kumo-recessed group-hover/folder:flex group-focus-within/folder:flex">
+									<Button
+										variant="ghost"
+										shape="square"
+										size="xs"
+										icon={<PencilSimpleIcon size={13} />}
+										aria-label={`Rename folder ${folder.name}`}
+										onClick={() => {
+											setRenameValue(folder.name);
+											setRenaming({ id: folder.id, name: folder.name });
+										}}
+									/>
+									<Button
+										variant="ghost"
+										shape="square"
+										size="xs"
+										icon={<TrashIcon size={13} />}
+										aria-label={`Delete folder ${folder.name}`}
+										onClick={() => setDeleting({ id: folder.id, name: folder.name })}
+									/>
+								</div>
+							</div>
 						))}
 					</div>
 				)}
@@ -234,6 +290,60 @@ export default function Sidebar() {
 					</div>
 				)}
 			</nav>
+
+			{/* Rename folder dialog */}
+			<Dialog.Root open={renaming !== null} onOpenChange={(open) => !open && setRenaming(null)}>
+				<Dialog size="sm" className="p-6">
+					<Dialog.Title className="text-base font-semibold mb-4">Rename folder</Dialog.Title>
+					<form onSubmit={handleRenameFolder} className="space-y-4">
+						<Input
+							label="Folder name"
+							value={renameValue}
+							onChange={(e) => setRenameValue(e.target.value)}
+							required
+						/>
+						<div className="flex justify-end gap-2">
+							<Dialog.Close
+								render={(props) => (
+									<Button {...props} variant="secondary">
+										Cancel
+									</Button>
+								)}
+							/>
+							<Button
+								type="submit"
+								variant="primary"
+								disabled={!renameValue.trim() || renameValue.trim() === renaming?.name}
+								loading={updateFolderMutation.isPending}
+							>
+								Rename
+							</Button>
+						</div>
+					</form>
+				</Dialog>
+			</Dialog.Root>
+
+			{/* Delete folder dialog */}
+			<Dialog.Root open={deleting !== null} onOpenChange={(open) => !open && setDeleting(null)}>
+				<Dialog size="sm" className="p-6">
+					<Dialog.Title className="text-base font-semibold mb-2">Delete "{deleting?.name}"?</Dialog.Title>
+					<p className="text-sm text-kumo-subtle mb-4">
+						The folder is removed. Messages in it are not deleted: they move to Archive.
+					</p>
+					<div className="flex justify-end gap-2">
+						<Dialog.Close
+							render={(props) => (
+								<Button {...props} variant="secondary">
+									Cancel
+								</Button>
+							)}
+						/>
+						<Button variant="destructive" onClick={handleDeleteFolder} loading={deleteFolderMutation.isPending}>
+							Delete folder
+						</Button>
+					</div>
+				</Dialog>
+			</Dialog.Root>
 
 			{/* Create folder dialog */}
 			<Dialog.Root

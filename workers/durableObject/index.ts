@@ -638,6 +638,14 @@ export class MailboxDO extends DurableObject<Env> {
 	}
 
 	async updateFolder(id: string, name: string) {
+		// Only custom folders can be renamed; Inbox, Sent, etc. keep their names (#89).
+		const existing = this.db
+			.select({ is_deletable: schema.folders.is_deletable })
+			.from(schema.folders)
+			.where(eq(schema.folders.id, id))
+			.get();
+		if (!existing || existing.is_deletable === 0) return undefined;
+
 		const result = this.db
 			.update(schema.folders)
 			.set({ name })
@@ -657,6 +665,10 @@ export class MailboxDO extends DurableObject<Env> {
 		if (!folder || folder.is_deletable === 0) {
 			return false;
 		}
+
+		// Deleting a folder must not delete its mail (the foreign key cascades):
+		// move the messages to Archive first (#89).
+		this.ctx.storage.sql.exec(`UPDATE emails SET folder_id = ? WHERE folder_id = ?`, Folders.ARCHIVE, id);
 
 		this.db
 			.delete(schema.folders)

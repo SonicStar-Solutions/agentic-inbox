@@ -376,8 +376,14 @@ app.post("/api/v1/mailboxes/:mailboxId/folders", async (c: AppContext) => {
 
 app.put("/api/v1/mailboxes/:mailboxId/folders/:id", async (c: AppContext) => {
 	const { name } = (await c.req.json()) as { name: string };
-	const f = await c.var.mailboxStub.updateFolder(c.req.param("id")!, name);
-	return f ? c.json(f) : c.json({ error: "Folder not found" }, 404);
+	const trimmed = (name ?? "").trim();
+	if (!trimmed) return c.json({ error: "Folder name is required" }, 400);
+	const folders = (await c.var.mailboxStub.getFolders()) as { id: string; name: string }[];
+	if (folders.some((fo) => fo.id !== c.req.param("id") && fo.name.toLowerCase() === trimmed.toLowerCase())) {
+		return c.json({ error: "A folder with this name already exists" }, 409);
+	}
+	const f = await c.var.mailboxStub.updateFolder(c.req.param("id")!, trimmed);
+	return f ? c.json(f) : c.json({ error: "Folder not found or cannot be renamed" }, 404);
 });
 
 app.delete("/api/v1/mailboxes/:mailboxId/folders/:id", async (c: AppContext) => {
