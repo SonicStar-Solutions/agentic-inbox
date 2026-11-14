@@ -29,6 +29,7 @@ export function useSearchEmails(
 			const params: Record<string, string> = {
 				page: String(page),
 				limit: String(SEARCH_PAGE_SIZE),
+				group: "thread", // one row per conversation (#89)
 			};
 			if (parsed.query) params.query = parsed.query;
 			if (parsed.from) params.from = parsed.from;

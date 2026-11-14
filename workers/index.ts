@@ -405,6 +405,7 @@ app.get("/api/v1/mailboxes/:mailboxId/search", async (c: AppContext) => {
 		to: c.req.query("to"), subject: c.req.query("subject"), date_start: c.req.query("date_start"),
 		date_end: c.req.query("date_end"), is_read: boolQuery(c, "is_read"),
 		is_starred: boolQuery(c, "is_starred"), has_attachment: boolQuery(c, "has_attachment"),
+		group_by_thread: c.req.query("group") === "thread",
 	};
 	const overlong = findOverlongSearchTerm({
 		query: searchOpts.query as string, from: searchOpts.from as string | undefined,

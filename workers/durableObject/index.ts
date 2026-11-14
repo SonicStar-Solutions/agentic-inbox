@@ -71,6 +71,8 @@ interface SearchFilterOptions {
 	is_read?: boolean;
 	is_starred?: boolean;
 	has_attachment?: boolean;
+	/** One result per conversation (the newest matching message), with the number of matches. */
+	group_by_thread?: boolean;
 }
 
 interface GetEmailsOptions {
@@ -815,7 +817,24 @@ export class MailboxDO extends DurableObject<Env> {
 		const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 		const offset = (page - 1) * limit;
 
-		const query = `
+		// Grouped by conversation (#89): newest matching message per thread, and how
+		// many messages of the thread matched.
+		const query = options.group_by_thread
+			? `
+			SELECT * FROM (
+				SELECT e.id, e.subject, e.sender, e.recipient, e.cc, e.bcc, e.date,
+					e.read, e.starred, e.in_reply_to, e.email_references,
+					e.thread_id, e.folder_id,
+					SUBSTR(e.body, 1, 300) as snippet,
+					f.name as folder_name,
+					ROW_NUMBER() OVER (PARTITION BY COALESCE(e.thread_id, e.id) ORDER BY e.date DESC) AS rn,
+					COUNT(*) OVER (PARTITION BY COALESCE(e.thread_id, e.id)) AS thread_count
+				FROM emails e
+				LEFT JOIN folders f ON e.folder_id = f.id
+				${where}
+			) WHERE rn = 1
+			ORDER BY date DESC LIMIT ?${params.length + 1} OFFSET ?${params.length + 2}`
+			: `
 			SELECT e.id, e.subject, e.sender, e.recipient, e.cc, e.bcc, e.date,
 				e.read, e.starred, e.in_reply_to, e.email_references,
 				e.thread_id, e.folder_id,
@@ -842,7 +861,9 @@ export class MailboxDO extends DurableObject<Env> {
 		const { conditions, params } = this.#buildSearchConditions(options);
 
 		const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-		const query = `SELECT COUNT(*) as total FROM emails ${where}`;
+		const query = options.group_by_thread
+			? `SELECT COUNT(DISTINCT COALESCE(thread_id, id)) as total FROM emails ${where}`
+			: `SELECT COUNT(*) as total FROM emails ${where}`;
 
 		const row = [...this.ctx.storage.sql.exec(query, ...params)][0] as
 			| { total: number }
