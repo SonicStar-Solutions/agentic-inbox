@@ -19,6 +19,7 @@ import {
 import { SendEmailRequestSchema } from "./lib/schemas";
 import { parseJsonBody } from "./lib/http";
 import { BulkRequestSchema } from "./lib/bulk";
+import { ScheduleRequestSchema, validateSendAt } from "./lib/scheduled";
 import { isAllowedDomain, parseDomains } from "./lib/domains";
 import { isAutoDraftEnabled, readMailboxSettings, validateAgentSettings } from "./lib/mailbox-settings";
 import { resolveReceivedDate } from "./lib/received-date";
@@ -300,6 +301,36 @@ app.post("/api/v1/mailboxes/:mailboxId/emails/bulk", async (c: AppContext) => {
 		await c.env.BUCKET.delete(result.attachments.map((a: any) => `attachments/${a.email_id}/${a.id}/${a.filename}`));
 	}
 	return c.json({ count: result.count });
+});
+
+// -- Scheduled sends ("send later") -----------------------------------
+
+app.post("/api/v1/mailboxes/:mailboxId/emails/schedule", async (c: AppContext) => {
+	const mailboxId = c.req.param("mailboxId")!;
+	const parsed = await parseJsonBody(c, ScheduleRequestSchema);
+	if (!parsed.ok) return parsed.response;
+	const request = parsed.data;
+
+	const when = validateSendAt(request.send_at);
+	if (!when.ok) return c.json({ error: when.error }, 400);
+	try {
+		validateSender(request.email.to, request.email.from, mailboxId);
+	} catch (e) {
+		if (e instanceof SenderValidationError) return c.json({ error: e.message }, 400);
+		throw e;
+	}
+	const id = crypto.randomUUID();
+	await (c.var.mailboxStub as any).scheduleEmail({ id, mailboxId, request, sendAt: when.iso });
+	return c.json({ id, status: "scheduled", send_at: when.iso }, 201);
+});
+
+app.get("/api/v1/mailboxes/:mailboxId/scheduled", async (c: AppContext) => {
+	return c.json({ scheduled: await (c.var.mailboxStub as any).listScheduled() });
+});
+
+app.delete("/api/v1/mailboxes/:mailboxId/scheduled/:id", async (c: AppContext) => {
+	const ok = await (c.var.mailboxStub as any).cancelScheduled(c.req.param("id")!);
+	return ok ? c.body(null, 204) : c.json({ error: "Not found, or already sending" }, 404);
 });
 
 app.post("/api/v1/mailboxes/:mailboxId/emails/:id/move", async (c: AppContext) => {

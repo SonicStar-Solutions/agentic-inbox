@@ -11,6 +11,10 @@ import { Folders } from "../../shared/folders";
 import type { Env } from "../types";
 import { applyMigrations, mailboxMigrations } from "./migrations";
 import { splitLikeTerm } from "../lib/search";
+import { buildReferencesChain, buildThreadingHeaders, generateMessageId, resolveOriginalEmail, validateSender } from "../lib/email-helpers";
+import { deliverRaw } from "../lib/send";
+import type { ScheduleRequest, ScheduledEmailSummary } from "../lib/scheduled";
+import type { EmailFull } from "../lib/schemas";
 import { buildBulkWhere, type BulkRequest } from "../lib/bulk";
 import { buildContacts, type Contact, type ContactSource } from "../lib/contacts";
 
@@ -814,6 +818,153 @@ export class MailboxDO extends DurableObject<Env> {
 			if (row) return String(row.thread_id || row.id);
 		}
 		return null;
+	}
+
+	// ── Scheduled sends ("send later") ─────────────────────────────
+
+	async scheduleEmail(item: { id: string; mailboxId: string; request: ScheduleRequest; sendAt: string }): Promise<string> {
+		this.ctx.storage.sql.exec(
+			`INSERT INTO scheduled_emails (id, kind, original_email_id, payload, send_at, status, updated_at)
+			 VALUES (?, ?, ?, ?, ?, 'pending', ?)`,
+			item.id,
+			item.request.kind,
+			item.request.originalEmailId ?? null,
+			JSON.stringify({ mailboxId: item.mailboxId, request: item.request }),
+			item.sendAt,
+			new Date().toISOString(),
+		);
+		await this.#armAlarm();
+		return item.id;
+	}
+
+	async listScheduled(): Promise<ScheduledEmailSummary[]> {
+		const rows = [
+			...this.ctx.storage.sql.exec(
+				`SELECT id, kind, payload, send_at, status, error FROM scheduled_emails ORDER BY send_at ASC LIMIT 200`,
+			),
+		] as any[];
+		return rows.map((r) => {
+			let to = "";
+			let subject = "";
+			try {
+				const email = JSON.parse(r.payload).request.email;
+				to = Array.isArray(email.to) ? email.to.join(", ") : String(email.to ?? "");
+				subject = String(email.subject ?? "");
+			} catch {
+				// leave blank
+			}
+			return { id: r.id, kind: r.kind, send_at: r.send_at, status: r.status, error: r.error ?? null, to, subject };
+		});
+	}
+
+	/** Cancel a scheduled message. A message that is mid-send can't be cancelled. */
+	async cancelScheduled(id: string): Promise<boolean> {
+		const row = [...this.ctx.storage.sql.exec(`SELECT status FROM scheduled_emails WHERE id = ?`, id)][0] as { status: string } | undefined;
+		if (!row || row.status === "sending") return false;
+		this.ctx.storage.sql.exec(`DELETE FROM scheduled_emails WHERE id = ?`, id);
+		await this.#armAlarm();
+		return true;
+	}
+
+	async alarm(): Promise<void> {
+		await this.#sendDueScheduled();
+		await this.#armAlarm();
+	}
+
+	async #armAlarm(): Promise<void> {
+		const next = [
+			...this.ctx.storage.sql.exec(`SELECT MIN(send_at) AS next FROM scheduled_emails WHERE status = 'pending'`),
+		][0] as { next: string | null } | undefined;
+		if (next?.next) {
+			await this.ctx.storage.setAlarm(Math.max(new Date(next.next).getTime(), Date.now() + 1000));
+		} else {
+			await this.ctx.storage.deleteAlarm();
+		}
+	}
+
+	async #sendDueScheduled(): Promise<void> {
+		const sql = this.ctx.storage.sql;
+		const now = new Date();
+		// A row left in 'sending' means the object was interrupted mid-send. Don't
+		// retry it blindly (that could double-send): flag it for the user instead.
+		sql.exec(
+			`UPDATE scheduled_emails SET status = 'failed', error = ?, updated_at = ? WHERE status = 'sending' AND updated_at < ?`,
+			"Interrupted while sending. Check Sent before sending it again.",
+			now.toISOString(),
+			new Date(now.getTime() - 5 * 60 * 1000).toISOString(),
+		);
+		const due = [
+			...sql.exec(`SELECT id, payload FROM scheduled_emails WHERE status = 'pending' AND send_at <= ? ORDER BY send_at ASC LIMIT 20`, now.toISOString()),
+		] as { id: string; payload: string }[];
+
+		for (const row of due) {
+			sql.exec(`UPDATE scheduled_emails SET status = 'sending', updated_at = ? WHERE id = ?`, new Date().toISOString(), row.id);
+			try {
+				const { mailboxId, request } = JSON.parse(row.payload) as { mailboxId: string; request: ScheduleRequest };
+				await this.#sendScheduled(mailboxId, request);
+				sql.exec(`DELETE FROM scheduled_emails WHERE id = ?`, row.id);
+			} catch (e) {
+				const message = (e as Error)?.message || "unknown error";
+				console.error(`Scheduled send ${row.id} failed:`, message);
+				sql.exec(`UPDATE scheduled_emails SET status = 'failed', error = ?, updated_at = ? WHERE id = ?`, message, new Date().toISOString(), row.id);
+			}
+		}
+	}
+
+	/** Send one scheduled message and file it in Sent (compose or reply). Throws on failure. */
+	async #sendScheduled(mailboxId: string, request: ScheduleRequest): Promise<void> {
+		const { to, cc, bcc, from, subject, html, text } = request.email;
+		const { toStr, fromEmail, fromDomain } = validateSender(to, from, mailboxId);
+
+		const rateLimitError = await this.checkSendRateLimit();
+		if (rateLimitError) throw new Error(rateLimitError);
+
+		let threading: { originalMsgId: string; references: string[]; threadId: string } | null = null;
+		if (request.kind === "reply") {
+			const raw = (await this.getEmail(request.originalEmailId!)) as EmailFull | null;
+			if (!raw) throw new Error("The message being replied to no longer exists");
+			const original = await resolveOriginalEmail(this as any, raw);
+			threading = buildReferencesChain(original);
+		}
+
+		const { messageId, outgoingMessageId } = generateMessageId(fromDomain);
+		const delivery = await deliverRaw(
+			this.env.EMAIL,
+			{ to, cc, bcc, from, subject, html, text, ...(threading ? { headers: buildThreadingHeaders(threading.originalMsgId, threading.references) } : {}) },
+			outgoingMessageId,
+		);
+		if (!delivery.ok) throw new Error(delivery.error);
+
+		const join = (v: unknown) => (Array.isArray(v) ? v.join(", ") : (v as string | undefined));
+		await this.createEmail(
+			Folders.SENT,
+			{
+				id: messageId,
+				subject,
+				sender: fromEmail,
+				recipient: toStr,
+				cc: cc ? join(cc)!.toLowerCase() : null,
+				bcc: bcc ? join(bcc)!.toLowerCase() : null,
+				date: new Date().toISOString(),
+				body: html || text || "",
+				in_reply_to: threading?.originalMsgId ?? null,
+				email_references: threading ? JSON.stringify(threading.references) : null,
+				thread_id: threading?.threadId ?? messageId,
+				message_id: delivery.messageId,
+				raw_headers: JSON.stringify([
+					{ key: "from", value: typeof from === "string" ? from : `${from.name} <${from.email}>` },
+					{ key: "to", value: join(to) },
+					...(cc ? [{ key: "cc", value: join(cc) }] : []),
+					...(bcc ? [{ key: "bcc", value: join(bcc) }] : []),
+					{ key: "subject", value: subject },
+					{ key: "date", value: new Date().toISOString() },
+					{ key: "message-id", value: `<${delivery.messageId}>` },
+					...(threading ? [{ key: "in-reply-to", value: `<${threading.originalMsgId}>` }] : []),
+				]),
+			},
+			[],
+		);
+		if (threading) await this.markThreadRead(threading.threadId);
 	}
 
 	// ── Purge (mailbox deletion) ───────────────────────────────────
