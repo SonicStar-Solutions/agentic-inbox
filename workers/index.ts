@@ -21,6 +21,7 @@ import { parseJsonBody } from "./lib/http";
 import { BulkRequestSchema } from "./lib/bulk";
 import { isAllowedDomain, parseDomains } from "./lib/domains";
 import { isAutoDraftEnabled, readMailboxSettings, validateAgentSettings } from "./lib/mailbox-settings";
+import { resolveReceivedDate } from "./lib/received-date";
 import { logRateLimitHit } from "./lib/rate-limit";
 import { findOverlongSearchTerm, MAX_SEARCH_TERM_LENGTH } from "./lib/search";
 import { handleReplyEmail, handleForwardEmail } from "./routes/reply-forward";
@@ -485,7 +486,7 @@ async function receiveEmail(event: InboundEmailEvent, env: Env, ctx: ExecutionCo
 		// Header To: for context (e.g. the list address); the envelope recipient when absent.
 		recipient: (allRecipients.length > 0 ? allRecipients : [mailboxId]).join(", "),
 		cc: ccRecipients.join(", ") || null, bcc: bccRecipients.join(", ") || null,
-		date: new Date().toISOString(), // uses receive time, not the email's Date header
+		date: resolveReceivedDate(parsedEmail.date), // the message's own Date when plausible, else receipt time
 		body: parsedEmail.html || parsedEmail.text || "",
 		in_reply_to: inReplyTo, email_references: emailReferences.length > 0 ? JSON.stringify(emailReferences) : null,
 		thread_id: threadId, message_id: originalMessageId, raw_headers: JSON.stringify(parsedEmail.headers),
