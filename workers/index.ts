@@ -343,6 +343,15 @@ app.get("/api/v1/mailboxes/:mailboxId/search", async (c: AppContext) => {
 	return c.json({ emails, totalCount });
 });
 
+// -- Contacts (recipient suggestions) ---------------------------------
+
+app.get("/api/v1/mailboxes/:mailboxId/contacts", async (c: AppContext) => {
+	const q = (c.req.query("q") || "").slice(0, 100);
+	const limit = intQuery(c, "limit") ?? 8;
+	const contacts = await (c.var.mailboxStub as any).searchContacts(q, c.req.param("mailboxId"), limit);
+	return c.json({ contacts });
+});
+
 // -- Attachments ----------------------------------------------------
 
 app.get("/api/v1/mailboxes/:mailboxId/emails/:emailId/attachments/:attachmentId", async (c: AppContext) => {

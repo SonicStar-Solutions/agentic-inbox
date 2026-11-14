@@ -11,6 +11,7 @@ import { Folders } from "../../shared/folders";
 import type { Env } from "../types";
 import { applyMigrations, mailboxMigrations } from "./migrations";
 import { splitLikeTerm } from "../lib/search";
+import { buildContacts, type Contact, type ContactSource } from "../lib/contacts";
 
 /**
  * SQL expression to normalize email subjects by stripping common
@@ -812,6 +813,17 @@ export class MailboxDO extends DurableObject<Env> {
 			if (row) return String(row.thread_id || row.id);
 		}
 		return null;
+	}
+
+	// ── Contacts (recipient suggestions) ────────────────────────────
+
+	async searchContacts(query: string, self?: string, limit = 8): Promise<Contact[]> {
+		const rows = [
+			...this.ctx.storage.sql.exec(
+				`SELECT sender, recipient, cc, bcc, date FROM emails ORDER BY date DESC LIMIT 3000`,
+			),
+		] as ContactSource[];
+		return buildContacts(rows, { self, query, limit });
 	}
 
 	// ── Rate limiting (raw SQL) ────────────────────────────────────

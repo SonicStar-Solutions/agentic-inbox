@@ -115,6 +115,13 @@ const api = {
 		get<EmailListResponse | Email[]>(`/api/v1/mailboxes/${mailboxId}/emails`, { params, signal: opts?.signal }),
 	sendEmail: (mailboxId: string, email: unknown) =>
 		post<void>(`/api/v1/mailboxes/${mailboxId}/emails`, email),
+	getContacts: async (mailboxId: string, q: string, limit = 8) => {
+		const res = await get<{ contacts: { address: string; count: number; last: string }[] }>(
+			`/api/v1/mailboxes/${mailboxId}/contacts`,
+			{ params: { q, limit: String(limit) } },
+		);
+		return res?.contacts ?? [];
+	},
 	getEmail: (mailboxId: string, id: string, opts?: { signal?: AbortSignal }) =>
 		get<Email>(`/api/v1/mailboxes/${mailboxId}/emails/${id}`, { signal: opts?.signal }),
 	updateEmail: (mailboxId: string, id: string, data: unknown) =>
