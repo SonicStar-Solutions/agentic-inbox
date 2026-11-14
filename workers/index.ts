@@ -416,9 +416,19 @@ async function receiveEmail(event: InboundEmailEvent, env: Env, ctx: ExecutionCo
 	const extractMsgId = (s: string) => { const m = s.match(/<([^>]+)>/); return m ? m[1] : s.trim().split(/\s+/)[0]; };
 	const inReplyTo = parsedEmail.inReplyTo ? extractMsgId(parsedEmail.inReplyTo) : null;
 	const emailReferences = parsedEmail.references ? parsedEmail.references.split(/\s+/).filter(Boolean).map(extractMsgId) : [];
+	// Thread resolution (#85). A reply names its parent in In-Reply-To /
+	// References, but the parent's stored thread_id is an internal id (or the
+	// root's Message-ID), not the header value. Look the referenced messages up
+	// by their stored Message-ID and join the thread of the nearest one we have.
+	// If none are stored, keep the old behaviour of keying the thread on the
+	// root Message-ID; messages with no threading headers fall back to subject.
 	let threadId = emailReferences[0] || inReplyTo || messageId;
 
-	if (!inReplyTo && emailReferences.length === 0) {
+	if (inReplyTo || emailReferences.length > 0) {
+		const candidates = [inReplyTo, ...[...emailReferences].reverse()].filter(Boolean) as string[];
+		const parentThread = await (stub as any).findThreadByMessageIds(candidates);
+		if (parentThread) threadId = parentThread;
+	} else {
 		const subjectThread = await (stub as any).findThreadBySubject(parsedEmail.subject || "", parsedEmail.from?.address || undefined);
 		if (subjectThread) threadId = subjectThread;
 	}

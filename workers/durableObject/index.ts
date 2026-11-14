@@ -783,6 +783,28 @@ export class MailboxDO extends DurableObject<Env> {
 		return null;
 	}
 
+	/**
+	 * Find the thread of an already-stored message by its RFC 5322 Message-ID.
+	 *
+	 * `messageIds` is ordered by priority (nearest ancestor first); the thread of
+	 * the first one that is stored wins. Returns null if none are stored.
+	 */
+	async findThreadByMessageIds(messageIds: string[]): Promise<string | null> {
+		const ids = [...new Set(messageIds.filter(Boolean))].slice(0, 25);
+		if (ids.length === 0) return null;
+
+		const placeholders = ids.map(() => "?").join(", ");
+		const rows = this.ctx.storage.sql
+			.exec(`SELECT id, thread_id, message_id FROM emails WHERE message_id IN (${placeholders})`, ...ids)
+			.toArray();
+
+		for (const id of ids) {
+			const row = rows.find((r) => (r as any).message_id === id) as any;
+			if (row) return String(row.thread_id || row.id);
+		}
+		return null;
+	}
+
 	// ── Rate limiting (raw SQL) ────────────────────────────────────
 
 	/**

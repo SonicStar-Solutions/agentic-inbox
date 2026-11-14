@@ -122,3 +122,44 @@ describe("route by SMTP envelope recipient (#32)", () => {
 		expect(stubs["alice@example.com"].rows).toHaveLength(1);
 	});
 });
+
+describe("inbound replies join the stored parent's thread (#85)", () => {
+	const first = rfc822({ From: "dave@example.net", To: "alice@example.com", Subject: "Project kickoff", "Message-ID": "<m1@example.net>", Date: "Sun, 08 Nov 2026 12:10:00 -0800" }, "first message");
+	const reply = rfc822({ From: "dave@example.net", To: "alice@example.com", Subject: "Re: Project kickoff", "Message-ID": "<m2@example.net>", "In-Reply-To": "<m1@example.net>", References: "<m1@example.net>" }, "follow-up");
+
+	it("puts the reply in the same thread as the stored message", async () => {
+		const { env, stubs } = makeFakeEnv();
+		await receiveEmail(rawEmailEvent(first, "alice@example.com") as any, env, fakeExecutionCtx().ctx);
+		await receiveEmail(rawEmailEvent(reply, "alice@example.com") as any, env, fakeExecutionCtx().ctx);
+
+		const [a, b] = stubs["alice@example.com"].rows.map((r) => r.email);
+		expect(b.in_reply_to).toBe("m1@example.net");
+		expect(b.thread_id).toBe(a.thread_id);
+		expect(b.thread_id).toBe(a.id);
+	});
+
+	it("joins the thread of the nearest stored ancestor in a long References chain", async () => {
+		const { env, stubs } = makeFakeEnv();
+		const second = rfc822({ From: "dave@example.net", To: "alice@example.com", Subject: "Re: Project kickoff", "Message-ID": "<m2@example.net>", "In-Reply-To": "<m1@example.net>", References: "<m1@example.net>" });
+		const third = rfc822({ From: "dave@example.net", To: "alice@example.com", Subject: "Re: Project kickoff", "Message-ID": "<m3@example.net>", "In-Reply-To": "<m2@example.net>", References: "<m1@example.net> <m2@example.net>" });
+		for (const raw of [first, second, third]) {
+			await receiveEmail(rawEmailEvent(raw, "alice@example.com") as any, env, fakeExecutionCtx().ctx);
+		}
+		const threads = new Set(stubs["alice@example.com"].rows.map((r) => r.email.thread_id));
+		expect(threads.size).toBe(1);
+	});
+
+	it("still starts a new thread when the referenced message is not stored", async () => {
+		const { env, stubs } = makeFakeEnv();
+		await receiveEmail(rawEmailEvent(reply, "alice@example.com") as any, env, fakeExecutionCtx().ctx);
+		expect(stubs["alice@example.com"].rows[0].email.thread_id).toBe("m1@example.net");
+	});
+
+	it("keeps the subject fallback for messages without threading headers", async () => {
+		const { env, stubs } = makeFakeEnv();
+		const stub = (stubs["alice@example.com"] = (await import("./test-utils")).makeFakeMailboxStub());
+		stub.findThreadBySubject = async () => "existing-thread";
+		await receiveEmail(rawEmailEvent(basic, "alice@example.com") as any, env, fakeExecutionCtx().ctx);
+		expect(stub.rows[0].email.thread_id).toBe("existing-thread");
+	});
+});
