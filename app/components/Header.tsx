@@ -16,7 +16,7 @@ export default function Header() {
 	const navigate = useNavigate();
 	const location = useLocation();
 	const [searchParams] = useSearchParams();
-	const { toggleSidebar, toggleAgentPanel, isAgentPanelOpen, toggleShortcuts } = useUIStore();
+	const { toggleSidebar, toggleAgentPanel, isAgentPanelOpen, toggleShortcuts, toggleAgentSheet } = useUIStore();
 	const { preference, cycle } = useTheme();
 	const themeLabel = preference === "system" ? "Theme: system" : preference === "light" ? "Theme: light" : "Theme: dark";
 
@@ -122,6 +122,14 @@ export default function Header() {
 			)}
 
 			<div className="flex items-center gap-1 ml-auto shrink-0">
+				<Button
+					variant="ghost"
+					shape="square"
+					icon={<RobotIcon size={20} />}
+					onClick={toggleAgentSheet}
+					aria-label="Open agent"
+					className="lg:hidden"
+				/>
 				<Tooltip content={isAgentPanelOpen ? "Hide agent panel" : "Show agent panel"} side="bottom" asChild>
 					<Button
 						variant={isAgentPanelOpen ? "secondary" : "ghost"}

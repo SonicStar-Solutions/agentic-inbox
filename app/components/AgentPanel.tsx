@@ -340,11 +340,14 @@ function AgentChatConnected({
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const inputRef = useRef<HTMLTextAreaElement>(null);
 	const [inputValue, setInputValue] = useState("");
-	const { startCompose } = useUIStore();
+	const { startCompose, selectedEmailId } = useUIStore();
 
 	const agent = useAgent({ agent: "EmailAgent", name: mailboxId });
-	const { messages, sendMessage, status, setMessages, stop } =
+	const { messages, sendMessage: sendChatMessage, status, setMessages, stop } =
 		useAgentChat({ agent });
+	// Tell the agent which email is open so "this email" means something (#89).
+	const sendMessage = (message: { text: string }) =>
+		sendChatMessage(message, selectedEmailId ? { body: { context: { selectedEmailId } } } : undefined);
 	const isStreaming = status === "streaming" || status === "submitted";
 
 	useEffect(() => {

@@ -37,6 +37,10 @@ interface UIState {
 	isAgentPanelOpen: boolean;
 	toggleAgentPanel: () => void;
 
+	// Agent as a full-screen sheet on small screens
+	isAgentSheetOpen: boolean;
+	toggleAgentSheet: () => void;
+
 	// Keyboard shortcut help
 	isShortcutsOpen: boolean;
 	toggleShortcuts: () => void;
@@ -50,6 +54,7 @@ export const useUIStore = create<UIState>((set, get) => ({
 	isSidebarOpen: false,
 	isAgentPanelOpen: true,
 	isShortcutsOpen: false,
+	isAgentSheetOpen: false,
 
 	selectEmail: (id) => set({ selectedEmailId: id, isComposing: false }),
 
@@ -82,6 +87,8 @@ export const useUIStore = create<UIState>((set, get) => ({
 	toggleSidebar: () => set({ isSidebarOpen: !get().isSidebarOpen }),
 
 	toggleAgentPanel: () => set({ isAgentPanelOpen: !get().isAgentPanelOpen }),
+
+	toggleAgentSheet: () => set({ isAgentSheetOpen: !get().isAgentSheetOpen }),
 
 	toggleShortcuts: () => set({ isShortcutsOpen: !get().isShortcutsOpen }),
 }));
