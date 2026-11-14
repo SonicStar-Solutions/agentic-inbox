@@ -11,6 +11,7 @@ import { Folders } from "../../shared/folders";
 import type { Env } from "../types";
 import { applyMigrations, mailboxMigrations } from "./migrations";
 import { splitLikeTerm } from "../lib/search";
+import { buildFtsQuery, FTS_SETUP_STATEMENTS } from "../lib/fts";
 import { buildReferencesChain, buildThreadingHeaders, generateMessageId, resolveOriginalEmail, validateSender } from "../lib/email-helpers";
 import { deliverRaw } from "../lib/send";
 import { aliasesOf } from "../lib/aliases";
@@ -116,6 +117,31 @@ export class MailboxDO extends DurableObject<Env> {
 		super(state, env);
 		this.db = drizzle(this.ctx.storage, { schema });
 		applyMigrations(this.ctx.storage.sql, mailboxMigrations, this.ctx.storage);
+		this.#fts = this.#setupFts();
+	}
+
+	/** True when the FTS5 index exists and search can use it (#89). */
+	#fts = false;
+
+	/**
+	 * Create the full-text index if it isn't there yet. All-or-nothing, and never
+	 * fatal: if FTS5 is unavailable the mailbox still works and search falls back
+	 * to LIKE.
+	 */
+	#setupFts(): boolean {
+		try {
+			const sql = this.ctx.storage.sql;
+			const exists = [...sql.exec(`SELECT 1 FROM sqlite_master WHERE name = 'emails_fts'`)].length > 0;
+			if (!exists) {
+				this.ctx.storage.transactionSync(() => {
+					for (const statement of FTS_SETUP_STATEMENTS) sql.exec(statement);
+				});
+			}
+			return true;
+		} catch (e) {
+			console.error("Full-text index unavailable, falling back to LIKE search:", (e as Error).message);
+			return false;
+		}
 	}
 
 	// ── Email CRUD (Drizzle) ───────────────────────────────────────
@@ -692,8 +718,14 @@ export class MailboxDO extends DurableObject<Env> {
 				.join(" AND ");
 
 		if (query) {
-			const c = likeAny(["subject", "body", "sender", "recipient", "cc", "bcc"], query);
-			if (c) conditions.push(`(${c})`);
+			const match = this.#fts ? buildFtsQuery(query) : null;
+			if (match) {
+				// Indexed word search over subject, body and addresses (#89)
+				conditions.push(`${prefix}rowid IN (SELECT rowid FROM emails_fts WHERE emails_fts MATCH ${addParam(match)})`);
+			} else {
+				const c = likeAny(["subject", "body", "sender", "recipient", "cc", "bcc"], query);
+				if (c) conditions.push(`(${c})`);
+			}
 		}
 		if (folder) {
 			const p = addParam(folder);
@@ -983,6 +1015,7 @@ export class MailboxDO extends DurableObject<Env> {
 		] as unknown as { email_id: string; id: string; filename: string }[];
 		await this.ctx.storage.deleteAll();
 		applyMigrations(this.ctx.storage.sql, mailboxMigrations, this.ctx.storage);
+		this.#fts = this.#setupFts();
 		return attachments;
 	}
 
