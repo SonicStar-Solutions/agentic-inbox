@@ -29,6 +29,7 @@ import {
 import { verifyDraft } from "./ai";
 import { sendEmail } from "../email-sender";
 import { normalizeMessageId } from "./send";
+import { logRateLimitHit } from "./rate-limit";
 import { Folders } from "../../shared/folders";
 import type { Env } from "../types";
 
@@ -409,6 +410,7 @@ export async function toolSendReply(
 	// Check send rate limit
 	const rateLimitError = await (stub as unknown as RateLimitStub).checkSendRateLimit();
 	if (rateLimitError) {
+		logRateLimitHit("mcp:send_reply", mailboxId, rateLimitError);
 		return { error: rateLimitError };
 	}
 
@@ -490,6 +492,7 @@ export async function toolSendEmail(
 	// Check send rate limit
 	const rateLimitError = await (stub as unknown as RateLimitStub).checkSendRateLimit();
 	if (rateLimitError) {
+		logRateLimitHit("mcp:send_email", mailboxId, rateLimitError);
 		return { error: rateLimitError };
 	}
 

@@ -16,6 +16,7 @@ import {
 } from "../lib/email-helpers";
 import { SendEmailRequestSchema } from "../lib/schemas";
 import { parseJsonBody } from "../lib/http";
+import { logRateLimitHit } from "../lib/rate-limit";
 import { Folders } from "../../shared/folders";
 import type { MailboxContext } from "../lib/mailbox";
 
@@ -52,6 +53,7 @@ export async function handleReplyEmail(c: AppContext) {
 	const rateLimitError = await (stub as unknown as RateLimitStub)
 		.checkSendRateLimit();
 	if (rateLimitError) {
+		logRateLimitHit("reply", mailboxId, rateLimitError);
 		return c.json({ error: rateLimitError }, 429);
 	}
 
@@ -154,6 +156,7 @@ export async function handleForwardEmail(c: AppContext) {
 	const rateLimitError = await (stub as unknown as RateLimitStub)
 		.checkSendRateLimit();
 	if (rateLimitError) {
+		logRateLimitHit("forward", mailboxId, rateLimitError);
 		return c.json({ error: rateLimitError }, 429);
 	}
 
