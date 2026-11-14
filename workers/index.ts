@@ -19,6 +19,7 @@ import {
 import { SendEmailRequestSchema } from "./lib/schemas";
 import { parseJsonBody } from "./lib/http";
 import { isAllowedDomain, parseDomains } from "./lib/domains";
+import { isAutoDraftEnabled, readMailboxSettings, validateAgentSettings } from "./lib/mailbox-settings";
 import { logRateLimitHit } from "./lib/rate-limit";
 import { findOverlongSearchTerm, MAX_SEARCH_TERM_LENGTH } from "./lib/search";
 import { handleReplyEmail, handleForwardEmail } from "./routes/reply-forward";
@@ -135,7 +136,10 @@ app.get("/api/v1/mailboxes/:mailboxId", async (c) => {
 
 app.put("/api/v1/mailboxes/:mailboxId", async (c) => {
 	const mailboxId = c.req.param("mailboxId")!;
-	const { settings } = (await c.req.json()) as { settings: Record<string, unknown> };
+	const { settings } = (await c.req.json().catch(() => ({}))) as { settings?: Record<string, unknown> };
+	if (!settings || typeof settings !== "object") return c.json({ error: "settings object required" }, 400);
+	const settingsError = validateAgentSettings(settings);
+	if (settingsError) return c.json({ error: settingsError }, 400);
 	const key = `mailboxes/${mailboxId}.json`;
 	if (!(await c.env.BUCKET.head(key))) return c.json({ error: "Not found" }, 404);
 	await c.env.BUCKET.put(key, JSON.stringify(settings));
@@ -460,6 +464,13 @@ async function receiveEmail(event: InboundEmailEvent, env: Env, ctx: ExecutionCo
 		in_reply_to: inReplyTo, email_references: emailReferences.length > 0 ? JSON.stringify(emailReferences) : null,
 		thread_id: threadId, message_id: originalMessageId, raw_headers: JSON.stringify(parsedEmail.headers),
 	}, attachmentData);
+
+	// Per-mailbox opt-out (#11): skip the agent entirely when auto-draft is off.
+	const mailboxSettings = await readMailboxSettings(env.BUCKET, mailboxId);
+	if (!isAutoDraftEnabled(mailboxSettings)) {
+		console.log(`Auto-draft disabled for ${mailboxId}; skipping agent trigger.`);
+		return;
+	}
 
 	// Resolve the agent through the SDK: getAgentByName performs the set-name
 	// handshake, which a bare idFromName()/get() stub skips. Without it, an agent

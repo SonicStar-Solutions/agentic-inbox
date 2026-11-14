@@ -14,6 +14,10 @@ export interface MailboxSettings {
 	signature?: SignatureSettings;
 	autoReply?: { enabled: boolean; subject: string; message: string };
 	agentSystemPrompt?: string;
+	/** Draft a reply automatically when mail arrives (default on). */
+	autoDraft?: { enabled: boolean };
+	/** Workers AI model override for this mailbox, e.g. @cf/moonshotai/kimi-k2.5. */
+	agentModel?: string;
 }
 
 export interface Mailbox {
