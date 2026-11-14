@@ -361,22 +361,39 @@ async function streamToArrayBuffer(stream: ReadableStream, streamSize: number) {
 	return result;
 }
 
-async function receiveEmail(event: { raw: ReadableStream; rawSize: number }, env: Env, ctx: ExecutionContext) {
+/** The subset of `ForwardableEmailMessage` that receiveEmail uses. */
+export type InboundEmailEvent = Pick<ForwardableEmailMessage, "raw" | "rawSize" | "to" | "from">;
+
+async function receiveEmail(event: InboundEmailEvent, env: Env, ctx: ExecutionContext) {
 	const rawEmail = await streamToArrayBuffer(event.raw, event.rawSize);
 	const parsedEmail = await new PostalMime().parse(rawEmail);
 
-	if (!parsedEmail.to?.length || !parsedEmail.to[0].address) throw new Error("received email with empty to");
-
 	const allowedAddresses = ((env.EMAIL_ADDRESSES ?? []) as string[]).map((a) => a.toLowerCase());
-	const allRecipients = parsedEmail.to.map((t) => t.address?.toLowerCase()).filter(Boolean) as string[];
+	const allRecipients = (parsedEmail.to || []).map((t) => t.address?.toLowerCase()).filter(Boolean) as string[];
 	const ccRecipients = (parsedEmail.cc || []).map((e) => e.address?.toLowerCase()).filter(Boolean) as string[];
 	const bccRecipients = (parsedEmail.bcc || []).map((e) => e.address?.toLowerCase()).filter(Boolean) as string[];
 
+	// The SMTP envelope recipient (RCPT TO) is authoritative: it is what Email
+	// Routing matched, and the only address that survives Bcc, Cc-only delivery,
+	// aliases and mailing lists. The To: header is only a display/threading hint
+	// and routinely names someone else (#32).
+	const envelopeTo = event.to?.trim().toLowerCase();
 	let mailboxId: string | undefined;
-	if (allowedAddresses.length > 0) {
-		mailboxId = allRecipients.find((addr) => allowedAddresses.includes(addr));
-		if (!mailboxId) { console.log(`Ignoring email: no recipient matches EMAIL_ADDRESSES.`); return; }
-	} else { mailboxId = allRecipients[0]; }
+	if (envelopeTo) {
+		if (allowedAddresses.length > 0 && !allowedAddresses.includes(envelopeTo)) {
+			console.log(`Ignoring email: ${envelopeTo} is not in EMAIL_ADDRESSES.`);
+			return;
+		}
+		mailboxId = envelopeTo;
+	} else {
+		// No envelope available (e.g. a caller that only supplies the raw message):
+		// fall back to the To: header as before.
+		if (!allRecipients.length) throw new Error("received email with empty to");
+		if (allowedAddresses.length > 0) {
+			mailboxId = allRecipients.find((addr) => allowedAddresses.includes(addr));
+			if (!mailboxId) { console.log(`Ignoring email: no recipient matches EMAIL_ADDRESSES.`); return; }
+		} else { mailboxId = allRecipients[0]; }
+	}
 	if (!mailboxId) throw new Error("received email with no valid recipient address");
 
 	const messageId = crypto.randomUUID();
@@ -410,7 +427,9 @@ async function receiveEmail(event: { raw: ReadableStream; rawSize: number }, env
 
 	await stub.createEmail(Folders.INBOX, {
 		id: messageId, subject: parsedEmail.subject || "",
-		sender: (parsedEmail.from?.address || "").toLowerCase(), recipient: allRecipients.join(", "),
+		sender: (parsedEmail.from?.address || "").toLowerCase(),
+		// Header To: for context (e.g. the list address); the envelope recipient when absent.
+		recipient: (allRecipients.length > 0 ? allRecipients : [mailboxId]).join(", "),
 		cc: ccRecipients.join(", ") || null, bcc: bccRecipients.join(", ") || null,
 		date: new Date().toISOString(), // uses receive time, not the email's Date header
 		body: parsedEmail.html || parsedEmail.text || "",
