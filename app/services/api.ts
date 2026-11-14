@@ -115,6 +115,8 @@ const api = {
 		get<EmailListResponse | Email[]>(`/api/v1/mailboxes/${mailboxId}/emails`, { params, signal: opts?.signal }),
 	sendEmail: (mailboxId: string, email: unknown) =>
 		post<void>(`/api/v1/mailboxes/${mailboxId}/emails`, email),
+	bulkEmails: (mailboxId: string, body: unknown) =>
+		post<{ count: number }>(`/api/v1/mailboxes/${mailboxId}/emails/bulk`, body),
 	getContacts: async (mailboxId: string, q: string, limit = 8) => {
 		const res = await get<{ contacts: { address: string; count: number; last: string }[] }>(
 			`/api/v1/mailboxes/${mailboxId}/contacts`,

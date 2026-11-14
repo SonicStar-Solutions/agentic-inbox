@@ -18,6 +18,7 @@ import {
 } from "./lib/email-helpers";
 import { SendEmailRequestSchema } from "./lib/schemas";
 import { parseJsonBody } from "./lib/http";
+import { BulkRequestSchema } from "./lib/bulk";
 import { isAllowedDomain, parseDomains } from "./lib/domains";
 import { isAutoDraftEnabled, readMailboxSettings, validateAgentSettings } from "./lib/mailbox-settings";
 import { logRateLimitHit } from "./lib/rate-limit";
@@ -276,6 +277,17 @@ app.delete("/api/v1/mailboxes/:mailboxId/emails/:id", async (c: AppContext) => {
 	if (attachments === null) return c.json({ error: "Not found" }, 404);
 	if (attachments.length > 0) await c.env.BUCKET.delete(attachments.map((att: any) => `attachments/${id}/${att.id}/${att.filename}`));
 	return c.body(null, 204);
+});
+
+app.post("/api/v1/mailboxes/:mailboxId/emails/bulk", async (c: AppContext) => {
+	const parsed = await parseJsonBody(c, BulkRequestSchema);
+	if (!parsed.ok) return parsed.response;
+	const result = await (c.var.mailboxStub as any).bulkUpdate(parsed.data);
+	if ("error" in result) return c.json({ error: result.error }, 400);
+	if (result.attachments.length > 0) {
+		await c.env.BUCKET.delete(result.attachments.map((a: any) => `attachments/${a.email_id}/${a.id}/${a.filename}`));
+	}
+	return c.json({ count: result.count });
 });
 
 app.post("/api/v1/mailboxes/:mailboxId/emails/:id/move", async (c: AppContext) => {

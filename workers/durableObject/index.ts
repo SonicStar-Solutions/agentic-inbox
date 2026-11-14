@@ -11,6 +11,7 @@ import { Folders } from "../../shared/folders";
 import type { Env } from "../types";
 import { applyMigrations, mailboxMigrations } from "./migrations";
 import { splitLikeTerm } from "../lib/search";
+import { buildBulkWhere, type BulkRequest } from "../lib/bulk";
 import { buildContacts, type Contact, type ContactSource } from "../lib/contacts";
 
 /**
@@ -813,6 +814,50 @@ export class MailboxDO extends DurableObject<Env> {
 			if (row) return String(row.thread_id || row.id);
 		}
 		return null;
+	}
+
+	// ── Bulk actions ───────────────────────────────────────────────
+
+	async bulkUpdate(req: BulkRequest): Promise<
+		{ count: number; attachments: { email_id: string; id: string; filename: string }[] } | { error: string }
+	> {
+		const { where, params } = buildBulkWhere(req);
+		const sql = this.ctx.storage.sql;
+		// rowsWritten also counts index writes, so count the matched rows instead.
+		const matched = (): number =>
+			Number(([...sql.exec(`SELECT COUNT(*) AS n FROM emails WHERE ${where}`, ...params)][0] as { n: number }).n);
+
+		switch (req.action) {
+			case "read":
+			case "unread": {
+				const count = matched();
+				sql.exec(`UPDATE emails SET read = ? WHERE ${where}`, req.action === "read" ? 1 : 0, ...params);
+				return { count, attachments: [] };
+			}
+			case "star":
+			case "unstar": {
+				const count = matched();
+				sql.exec(`UPDATE emails SET starred = ? WHERE ${where}`, req.action === "star" ? 1 : 0, ...params);
+				return { count, attachments: [] };
+			}
+			case "move": {
+				const folder = [...sql.exec(`SELECT id FROM folders WHERE id = ? LIMIT 1`, req.folderId!)][0] as { id: string } | undefined;
+				if (!folder) return { error: "Folder not found" };
+				const count = matched();
+				sql.exec(`UPDATE emails SET folder_id = ? WHERE ${where}`, folder.id, ...params);
+				return { count, attachments: [] };
+			}
+			case "delete": {
+				const ids = [...sql.exec(`SELECT id FROM emails WHERE ${where}`, ...params)].map((r: any) => String(r.id));
+				if (ids.length === 0) return { count: 0, attachments: [] };
+				const marks = ids.map(() => "?").join(", ");
+				const attachments = [
+					...sql.exec(`SELECT email_id, id, filename FROM attachments WHERE email_id IN (${marks})`, ...ids),
+				] as unknown as { email_id: string; id: string; filename: string }[];
+				sql.exec(`DELETE FROM emails WHERE id IN (${marks})`, ...ids);
+				return { count: ids.length, attachments };
+			}
+		}
 	}
 
 	// ── Contacts (recipient suggestions) ────────────────────────────

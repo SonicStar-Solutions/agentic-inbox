@@ -2,7 +2,7 @@
 // Licensed under the Apache 2.0 license found in the LICENSE file or at:
 //     https://opensource.org/licenses/Apache-2.0
 
-import { Button, Pagination, Tooltip } from "@cloudflare/kumo";
+import { Button, Pagination, Tooltip, useKumoToastManager } from "@cloudflare/kumo";
 import {
 	ArchiveIcon,
 	ArrowBendUpLeftIcon,
@@ -21,9 +21,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router";
 import { Folders } from "shared/folders";
 import { formatListDate } from "shared/dates";
+import BulkToolbar from "~/components/BulkToolbar";
 import MailboxSplitView from "~/components/MailboxSplitView";
+import { buildBulkRequest, type BulkAction } from "~/lib/bulk";
 import { getSnippetText } from "~/lib/utils";
 import {
+	useBulkAction,
 	useDeleteEmail,
 	useEmails,
 	useMarkThreadRead,
@@ -158,6 +161,10 @@ export default function EmailListRoute() {
 	const updateEmail = useUpdateEmail();
 	const markThreadRead = useMarkThreadRead();
 	const deleteEmail = useDeleteEmail();
+	const bulk = useBulkAction();
+	const toastManager = useKumoToastManager();
+	// Selected list rows by email id (#88)
+	const [selected, setSelected] = useState<Map<string, Email>>(new Map());
 
 	const params = useMemo(
 		() => ({
@@ -188,6 +195,54 @@ export default function EmailListRoute() {
 	}, [folders, folder]);
 
 	const isPanelOpen = selectedEmailId !== null || isComposing;
+
+	// Selection only makes sense for the rows on screen: drop it on folder or
+	// page change, and prune rows that disappeared (moved, deleted, refetched).
+	useEffect(() => {
+		setSelected((prev) => {
+			if (prev.size === 0) return prev;
+			const visible = new Set(emails.map((e) => e.id));
+			const next = new Map([...prev].filter(([id]) => visible.has(id)));
+			return next.size === prev.size ? prev : next;
+		});
+	}, [emails]);
+	useEffect(() => setSelected(new Map()), [mailboxId, folder, page]);
+
+	const toggleSelected = (email: Email) =>
+		setSelected((prev) => {
+			const next = new Map(prev);
+			if (next.has(email.id)) next.delete(email.id);
+			else next.set(email.id, email);
+			return next;
+		});
+	const allSelected = emails.length > 0 && selected.size === emails.length;
+	const toggleAll = () => setSelected(allSelected ? new Map() : new Map(emails.map((e) => [e.id, e])));
+
+	const inTrash = folder === Folders.TRASH;
+	const runBulk = (action: BulkAction, folderId?: string) => {
+		if (!mailboxId || selected.size === 0) return;
+		const rows = [...selected.values()];
+		let effective: BulkAction = action;
+		let destination = folderId;
+		if (action === "delete") {
+			if (inTrash) {
+				if (!window.confirm(`Permanently delete ${rows.length} conversation${rows.length === 1 ? "" : "s"}? This cannot be undone.`)) return;
+			} else {
+				effective = "move";
+				destination = Folders.TRASH;
+			}
+		}
+		bulk.mutate(
+			{ mailboxId, request: buildBulkRequest(effective, rows, folder || Folders.INBOX, destination) },
+			{
+				onSuccess: () => {
+					if (selectedEmailId && rows.some((r) => r.id === selectedEmailId) && (effective === "move" || effective === "delete")) closePanel();
+					setSelected(new Map());
+					toastManager.add({ title: `${rows.length} conversation${rows.length === 1 ? "" : "s"} updated` });
+				},
+			},
+		);
+	};
 
 	// Track folder identity to detect folder changes vs page changes
 	const prevFolderRef = useRef<string | undefined>(undefined);
@@ -276,7 +331,21 @@ export default function EmailListRoute() {
 			selectedEmailId={selectedEmailId}
 			isComposing={isComposing}
 		>
-				{/* Folder header */}
+				{/* Folder header, or the bulk toolbar while rows are selected */}
+				{selected.size > 0 ? (
+					<BulkToolbar
+						count={selected.size}
+						allSelected={allSelected}
+						onToggleAll={toggleAll}
+						onClear={() => setSelected(new Map())}
+						onAction={runBulk}
+						moveTargets={folders.filter((f) => f.id !== folder && f.id !== Folders.DRAFT && f.id !== Folders.SENT).map((f) => ({ id: f.id, name: f.name }))}
+						canArchive={folder !== Folders.ARCHIVE}
+						inTrash={inTrash}
+						busy={bulk.isPending}
+					/>
+				) : (
+
 				<div className="flex items-center justify-between px-4 py-3.5 border-b border-kumo-line shrink-0 md:px-5">
 					<h1 className="text-lg font-semibold text-kumo-default">
 						{folderName}
@@ -309,6 +378,7 @@ export default function EmailListRoute() {
 						</Tooltip>
 					</div>
 				</div>
+				)}
 
 				{/* Email rows */}
 				<div className="flex-1 overflow-y-auto">
@@ -341,6 +411,16 @@ export default function EmailListRoute() {
 											isPanelOpen ? "md:px-4 md:py-2.5" : ""
 										} ${isSelected ? "bg-kumo-tint" : "hover:bg-kumo-tint"}`}
 									>
+										{/* Select */}
+										<input
+											type="checkbox"
+											checked={selected.has(email.id)}
+											onClick={(e) => e.stopPropagation()}
+											onChange={() => toggleSelected(email)}
+											aria-label={`Select conversation: ${email.subject}`}
+											className="h-4 w-4 shrink-0"
+										/>
+
 										{/* Unread dot */}
 										<div className="w-2.5 shrink-0 flex justify-center">
 											{hasUnread(email) && (

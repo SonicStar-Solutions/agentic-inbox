@@ -4,6 +4,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import api from "~/services/api";
+import type { BulkRequestBody } from "~/lib/bulk";
 import type { Email } from "~/types";
 import { queryKeys } from "./keys";
 
@@ -278,6 +279,16 @@ export function useForwardEmail() {
 			email,
 		}: { mailboxId: string; emailId: string; email: unknown }) =>
 			api.forwardEmail(mailboxId, emailId, email),
+		onSuccess: (_data, { mailboxId }) => invalidate(mailboxId),
+	});
+}
+
+/** Apply one action to many selected conversations at once (#88). */
+export function useBulkAction() {
+	const invalidate = useInvalidateEmailData();
+	return useMutation({
+		mutationFn: ({ mailboxId, request }: { mailboxId: string; request: BulkRequestBody }) =>
+			api.bulkEmails(mailboxId, request),
 		onSuccess: (_data, { mailboxId }) => invalidate(mailboxId),
 	});
 }
