@@ -36,6 +36,10 @@ interface UIState {
 	// Agent panel
 	isAgentPanelOpen: boolean;
 	toggleAgentPanel: () => void;
+
+	// Keyboard shortcut help
+	isShortcutsOpen: boolean;
+	toggleShortcuts: () => void;
 }
 
 export const useUIStore = create<UIState>((set, get) => ({
@@ -45,6 +49,7 @@ export const useUIStore = create<UIState>((set, get) => ({
 	composeOptions: { mode: "new", originalEmail: null },
 	isSidebarOpen: false,
 	isAgentPanelOpen: true,
+	isShortcutsOpen: false,
 
 	selectEmail: (id) => set({ selectedEmailId: id, isComposing: false }),
 
@@ -77,4 +82,6 @@ export const useUIStore = create<UIState>((set, get) => ({
 	toggleSidebar: () => set({ isSidebarOpen: !get().isSidebarOpen }),
 
 	toggleAgentPanel: () => set({ isAgentPanelOpen: !get().isAgentPanelOpen }),
+
+	toggleShortcuts: () => set({ isShortcutsOpen: !get().isShortcutsOpen }),
 }));

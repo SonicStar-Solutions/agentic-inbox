@@ -5,7 +5,9 @@
 import { useEffect, useRef } from "react";
 import { Outlet, useParams } from "react-router";
 import AgentSidebar from "~/components/AgentSidebar";
+import ShortcutsDialog from "~/components/ShortcutsDialog";
 import UndoSendBar from "~/components/UndoSendBar";
+import { useGlobalShortcuts } from "~/hooks/useGlobalShortcuts";
 import Header from "~/components/Header";
 import Sidebar from "~/components/Sidebar";
 import { useMailbox } from "~/queries/mailboxes";
@@ -22,6 +24,8 @@ export default function MailboxRoute() {
 		isAgentPanelOpen,
 		closePanel,
 	} = useUIStore();
+
+	useGlobalShortcuts();
 
 	useEffect(() => {
 		if (
@@ -75,6 +79,7 @@ export default function MailboxRoute() {
 			)}
 
 			<UndoSendBar />
+			<ShortcutsDialog />
 		</div>
 	);
 }

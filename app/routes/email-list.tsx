@@ -24,6 +24,7 @@ import { formatListDate } from "shared/dates";
 import BulkToolbar from "~/components/BulkToolbar";
 import MailboxSplitView from "~/components/MailboxSplitView";
 import { buildBulkRequest, type BulkAction } from "~/lib/bulk";
+import { moveSelection, shouldHandleKey } from "~/lib/shortcuts";
 import { getSnippetText } from "~/lib/utils";
 import {
 	useBulkAction,
@@ -219,9 +220,9 @@ export default function EmailListRoute() {
 	const toggleAll = () => setSelected(allSelected ? new Map() : new Map(emails.map((e) => [e.id, e])));
 
 	const inTrash = folder === Folders.TRASH;
-	const runBulk = (action: BulkAction, folderId?: string) => {
-		if (!mailboxId || selected.size === 0) return;
-		const rows = [...selected.values()];
+	const runBulk = (action: BulkAction, folderId?: string, rowsOverride?: Email[]) => {
+		const rows = rowsOverride ?? [...selected.values()];
+		if (!mailboxId || rows.length === 0) return;
 		let effective: BulkAction = action;
 		let destination = folderId;
 		if (action === "delete") {
@@ -256,6 +257,63 @@ export default function EmailListRoute() {
 			setPage(1);
 		}
 	}, [mailboxId, folder, closePanel]);
+
+	// List shortcuts (#89): j/k move through conversations, x selects, e archives,
+	// # deletes, s stars, u marks unread. They act on the selected rows, or on the
+	// open conversation when nothing is ticked.
+	useEffect(() => {
+		const onKey = (e: KeyboardEvent) => {
+			if (!shouldHandleKey(e) || isComposing) return;
+			const current = emails.find((m) => m.id === selectedEmailId) ?? null;
+			const target = (): Email[] => (selected.size > 0 ? [...selected.values()] : current ? [current] : []);
+
+			switch (e.key) {
+				case "j":
+				case "k": {
+					const next = moveSelection(emails.map((m) => m.id), selectedEmailId, e.key === "j" ? 1 : -1);
+					const row = emails.find((m) => m.id === next);
+					if (row) {
+						e.preventDefault();
+						handleRowClick(row);
+						document.querySelector(`[data-email-id="${row.id}"]`)?.scrollIntoView({ block: "nearest" });
+					}
+					break;
+				}
+				case "x":
+					if (current) {
+						e.preventDefault();
+						toggleSelected(current);
+					}
+					break;
+				case "e":
+					if (folder !== Folders.ARCHIVE && target().length > 0) {
+						e.preventDefault();
+						runBulk("move", Folders.ARCHIVE, target());
+					}
+					break;
+				case "#":
+					if (target().length > 0) {
+						e.preventDefault();
+						runBulk("delete", undefined, target());
+					}
+					break;
+				case "s":
+					if (current && mailboxId) {
+						e.preventDefault();
+						updateEmail.mutate({ mailboxId, id: current.id, data: { starred: !current.starred } });
+					}
+					break;
+				case "u":
+					if (current && mailboxId) {
+						e.preventDefault();
+						updateEmail.mutate({ mailboxId, id: current.id, data: { read: false } });
+					}
+					break;
+			}
+		};
+		document.addEventListener("keydown", onKey);
+		return () => document.removeEventListener("keydown", onKey);
+	});
 
 	const toggleStar = (e: React.MouseEvent, email: Email) => {
 		e.preventDefault();
@@ -398,6 +456,7 @@ export default function EmailListRoute() {
 								return (
 									<div
 										key={email.id}
+										data-email-id={email.id}
 										role="button"
 										tabIndex={0}
 										onClick={() => handleRowClick(email)}

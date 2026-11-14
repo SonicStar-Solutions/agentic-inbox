@@ -3,7 +3,7 @@
 //     https://opensource.org/licenses/Apache-2.0
 
 import { Button, Input, Tooltip } from "@cloudflare/kumo";
-import { GearSixIcon, ListIcon, MagnifyingGlassIcon, MonitorIcon, MoonIcon, RobotIcon, SunIcon, XIcon } from "@phosphor-icons/react";
+import { GearSixIcon, KeyboardIcon, ListIcon, MagnifyingGlassIcon, MonitorIcon, MoonIcon, RobotIcon, SunIcon, XIcon } from "@phosphor-icons/react";
 import { type KeyboardEvent, useEffect, useState } from "react";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 import { useTheme } from "~/hooks/useTheme";
@@ -16,7 +16,7 @@ export default function Header() {
 	const navigate = useNavigate();
 	const location = useLocation();
 	const [searchParams] = useSearchParams();
-	const { toggleSidebar, toggleAgentPanel, isAgentPanelOpen } = useUIStore();
+	const { toggleSidebar, toggleAgentPanel, isAgentPanelOpen, toggleShortcuts } = useUIStore();
 	const { preference, cycle } = useTheme();
 	const themeLabel = preference === "system" ? "Theme: system" : preference === "light" ? "Theme: light" : "Theme: dark";
 
@@ -130,6 +130,16 @@ export default function Header() {
 						onClick={toggleAgentPanel}
 						aria-label="Toggle agent panel"
 						className="hidden lg:inline-flex"
+					/>
+				</Tooltip>
+				<Tooltip content="Keyboard shortcuts (?)" side="bottom" asChild>
+					<Button
+						variant="ghost"
+						shape="square"
+						icon={<KeyboardIcon size={20} />}
+						onClick={toggleShortcuts}
+						aria-label="Keyboard shortcuts"
+						className="hidden md:inline-flex"
 					/>
 				</Tooltip>
 				<Tooltip content={`${themeLabel} (click to change)`} side="bottom" asChild>
