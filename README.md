@@ -34,6 +34,17 @@ https://github.com/cloudflare/agentic-inbox/issues/4#issuecomment-4269118513
    * Resolution: [turn Access off and back on for the Worker to get the Access modal again](https://developers.cloudflare.com/changelog/post/2025-10-03-one-click-access-for-workers/), then reset your Worker secrets to the latest `POLICY_AUD` and `TEAM_DOMAIN` values shown there.
 2. If you see `Cloudflare Access must be configured in production`, this application is intentionally enforcing Cloudflare Access so your inbox is not exposed to anyone on the internet.
    * Resolution: enable Access using [one-click Cloudflare Access for Workers](https://developers.cloudflare.com/changelog/post/2025-10-03-one-click-access-for-workers/), then set the `POLICY_AUD` and `TEAM_DOMAIN` Worker secrets from the modal values.
+3. If you still see `Invalid or expired Access token` right after enabling Access, the values that were auto-populated as secrets may not be correct. Copy `POLICY_AUD` and `TEAM_DOMAIN` from the Access modal and **re-save them yourself** (rotate the secrets).
+4. If you can't find **Domains & Routes** in the dashboard, the Access toggles may now live in the Worker's **Domains** section: enable the Access checkboxes there and set the policy to *Restricted*.
+5. There is no sign-up page. The only way in is through your Cloudflare Access policy, so add your own email (or group) to the Access policy for the Worker.
+6. If the Deploy button fails with HTTP 400 and "GitHub authorization has expired", [reinstall the Cloudflare GitHub app](https://developers.cloudflare.com/pages/configuration/git-integration/github-integration/#reinstall-the-cloudflare-github-app) with access to your account, or fork this repo and deploy your fork.
+
+### Troubleshooting sending and the agent
+
+- **Sending fails or mail never arrives.** Outbound mail goes through [Email Service](https://developers.cloudflare.com/email-service/), which has its own [plan requirements and limits](https://developers.cloudflare.com/email-service/platform/pricing/) (for example, sending to arbitrary recipients needs a paid Workers plan). If the service rejects a message, the app now reports the error and does not file the message in Sent. Receiving only needs Email Routing.
+- **The agent does not respond.** The agent needs the Workers AI binding. Check `wrangler tail` for `Auto-draft trigger failed` or Workers AI errors. Auto-drafts are skipped for emails the prompt-injection scanner flags, and for emails the agent decides need no reply (it logs `Skipped: <reason>` in the agent chat).
+- **Attachments.** Inbound attachments are stored in R2 and downloadable from the message. Outbound attachments are sent inline (subject to email provider size limits).
+- **MCP.** The `/mcp` endpoint is behind the same Access check as the app. MCP clients must authenticate through Access, for example with an [Access service token](https://developers.cloudflare.com/cloudflare-one/identity/service-tokens/) (`CF-Access-Client-Id` / `CF-Access-Client-Secret` headers) allowed by your Access policy.
 
 ## Features
 
@@ -47,7 +58,7 @@ https://github.com/cloudflare/agentic-inbox/issues/4#issuecomment-4269118513
 
 - **Frontend:** React 19, React Router v7, Tailwind CSS, Zustand, TipTap, `@cloudflare/kumo`
 - **Backend:** Hono, Cloudflare Workers, Durable Objects (SQLite), R2, Email Routing
-- **AI Agent:** Cloudflare Agents SDK (`AIChatAgent`), AI SDK v6, Workers AI (`@cf/moonshotai/kimi-k2.5`), `react-markdown` + `remark-gfm`
+- **AI Agent:** Cloudflare Agents SDK (`AIChatAgent`), AI SDK v6, Workers AI (default `@cf/moonshotai/kimi-k2.5`, [configurable](#ai-models)), `react-markdown` + `remark-gfm`
 - **Auth:** Cloudflare Access JWT validation (required outside local development)
 
 ## Getting Started
@@ -66,6 +77,25 @@ npm run dev
 
 ```bash
 npm run deploy
+```
+
+### AI models
+
+Models are defined in `workers/lib/models.ts`. Override any of them with a Worker var (see the commented examples in `wrangler.jsonc`) without changing code:
+
+| Role | Variable | Default |
+| --- | --- | --- |
+| Agent chat | `AI_MODEL_AGENT` | `@cf/moonshotai/kimi-k2.5` |
+| Auto-draft | `AI_MODEL_AUTO_DRAFT` | `@cf/moonshotai/kimi-k2.5` |
+| Prompt-injection scanner | `AI_MODEL_INJECTION_SCANNER` | `@cf/zai-org/glm-4.7-flash` |
+| Draft verifier | `AI_MODEL_DRAFT_VERIFIER` | `@cf/meta/llama-4-scout-17b-16e-instruct` |
+
+Workers AI periodically deprecates models; check the [catalog](https://developers.cloudflare.com/workers-ai/models/) and override the variable if one is retired. If the injection scanner model errors or returns no verdict, auto-draft is skipped (fail closed).
+
+### Tests
+
+```bash
+npm test
 ```
 
 ## Prerequisites
