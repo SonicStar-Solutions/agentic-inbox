@@ -14,6 +14,7 @@ import {
 	stripHtml,
 	toEmailListValue,
 } from "~/lib/utils";
+import { pendingSends } from "~/lib/pending-send";
 import { useDeleteEmail, useForwardEmail, useReplyToEmail, useSaveDraft, useSendEmail } from "~/queries/emails";
 import { useMailbox } from "~/queries/mailboxes";
 import { useUIStore } from "~/hooks/useUIStore";
@@ -164,7 +165,7 @@ function buildInitialComposeFields(
 
 export function useComposeForm(mailboxId?: string, _folder?: string) {
 	const toastManager = useKumoToastManager();
-	const { composeOptions, closePanel, closeCompose } = useUIStore();
+	const { composeOptions, closePanel, closeCompose, startCompose } = useUIStore();
 	const { data: currentMailbox } = useMailbox(mailboxId);
 	const sendEmailMutation = useSendEmail();
 	const saveDraftMutation = useSaveDraft();
@@ -250,16 +251,36 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 			text: htmlToPlainText(body),
 		};
 		const draftId = composeOptions.draftEmail?.id; const mode = composeOptions.mode; const originalId = composeOptions.originalEmail?.id || composeOptions.draftEmail?.in_reply_to;
-		setIsSending(true); toastManager.add({ title: "Sending email..." });
-		try {
-			if ((mode === "reply" || mode === "reply-all") && originalId) await replyMutation.mutateAsync({ mailboxId, emailId: originalId, email: emailData });
-			else if (mode === "forward" && originalId) await forwardMutation.mutateAsync({ mailboxId, emailId: originalId, email: emailData });
-			else await sendEmailMutation.mutateAsync({ mailboxId, email: emailData });
-			if (draftId) deleteEmailMutation.mutate({ mailboxId, id: draftId });
-			toastManager.add({ title: "Email sent!" });
-			onClose();
-		} catch (err: unknown) { const message = (err instanceof Error ? err.message : null) || "Failed to send email."; setError(message); toastManager.add({ title: message, variant: "error" }); }
-		finally { setIsSending(false); }
+		// Undo send (#89): hold the message for a few seconds. The composer closes at
+		// once; Undo (or a failed send) reopens it with everything the user typed.
+		const restore = (restoreError?: string) => {
+			const base = composeOptions.draftEmail;
+			startCompose({
+				...composeOptions,
+				draftEmail: {
+					...(base ?? { id: "", sender: currentMailbox.email, date: new Date().toISOString(), read: true, starred: false }),
+					recipient: to, cc, bcc, subject, body,
+				},
+			});
+			if (restoreError) toastManager.add({ title: restoreError, variant: "error" });
+		};
+		const label = toRecipients.length === 1 ? `to ${toRecipients[0]}` : `to ${toRecipients.length} recipients`;
+		pendingSends.queue(
+			label,
+			async () => {
+				try {
+					if ((mode === "reply" || mode === "reply-all") && originalId) await replyMutation.mutateAsync({ mailboxId, emailId: originalId, email: emailData });
+					else if (mode === "forward" && originalId) await forwardMutation.mutateAsync({ mailboxId, emailId: originalId, email: emailData });
+					else await sendEmailMutation.mutateAsync({ mailboxId, email: emailData });
+					if (draftId) deleteEmailMutation.mutate({ mailboxId, id: draftId });
+					toastManager.add({ title: "Email sent!" });
+				} catch (err: unknown) {
+					restore((err instanceof Error ? err.message : null) || "Failed to send email.");
+				}
+			},
+			() => restore(),
+		);
+		onClose();
 	};
 
 	return { to, setTo, cc, setCc, bcc, setBcc, showCcBcc, setShowCcBcc, subject, setSubject, body, setBody, error, setError, isSavingDraft, isSending, formTitle, handleSaveDraft, handleSend, closeCompose, closePanel };
