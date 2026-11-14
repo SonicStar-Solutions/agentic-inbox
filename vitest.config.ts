@@ -3,11 +3,14 @@
 //     https://opensource.org/licenses/Apache-2.0
 
 import { defineConfig } from "vitest/config";
+import tsconfigPaths from "vite-tsconfig-paths";
 
 // Unit tests run in plain Node. They cover pure logic and Hono routes driven
 // through `app.request()` with fake bindings, so the Cloudflare Vite plugin is
 // intentionally not loaded here.
 export default defineConfig({
+	// Resolve the "~/" and baseUrl ("shared/...") imports used by app code.
+	plugins: [tsconfigPaths({ projects: ["./tsconfig.cloudflare.json"] })],
 	test: {
 		environment: "node",
 		setupFiles: ["./workers/test-setup.ts"],
