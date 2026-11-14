@@ -166,7 +166,9 @@ export function getSignatureBlock(settings?: {
 		const content = sig.html
 			? DOMPurify.sanitize(sig.html)
 			: escapeHtml(sig.text || "");
-		return `<div style="border-top: 1px solid #ccc; margin-top: 16px; padding-top: 12px;">${content}</div>`;
+		// Plain-text signatures keep their line breaks (#89)
+		const wrap = sig.html ? "" : " white-space: pre-wrap;";
+		return `<div style="border-top: 1px solid #ccc; margin-top: 16px; padding-top: 12px;${wrap}">${content}</div>`;
 	}
 	return "";
 }
