@@ -306,6 +306,11 @@ export class EmailAgent extends AIChatAgent<any> {
 	 */
 	async onRequest(request: Request): Promise<Response> {
 		const url = new URL(request.url);
+		if (url.pathname === "/purge" && request.method === "POST") {
+			// Mailbox deleted: drop this agent's chat history and state.
+			await this.destroy();
+			return new Response(null, { status: 204 });
+		}
 		if (url.pathname === "/onNewEmail" && request.method === "POST") {
 			try {
 				const emailData = await request.json() as {

@@ -816,6 +816,22 @@ export class MailboxDO extends DurableObject<Env> {
 		return null;
 	}
 
+	// ── Purge (mailbox deletion) ───────────────────────────────────
+
+	/**
+	 * Delete everything this mailbox stores and return its attachment keys so the
+	 * caller can remove the blobs from R2. The schema is re-applied afterwards so
+	 * the same address can be created again.
+	 */
+	async purgeAll(): Promise<{ email_id: string; id: string; filename: string }[]> {
+		const attachments = [
+			...this.ctx.storage.sql.exec(`SELECT email_id, id, filename FROM attachments`),
+		] as unknown as { email_id: string; id: string; filename: string }[];
+		await this.ctx.storage.deleteAll();
+		applyMigrations(this.ctx.storage.sql, mailboxMigrations, this.ctx.storage);
+		return attachments;
+	}
+
 	// ── Bulk actions ───────────────────────────────────────────────
 
 	async bulkUpdate(req: BulkRequest): Promise<

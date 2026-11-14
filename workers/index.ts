@@ -152,7 +152,18 @@ app.delete("/api/v1/mailboxes/:mailboxId", async (c) => {
 	const mailboxId = c.req.param("mailboxId")!;
 	const key = `mailboxes/${mailboxId}.json`;
 	if (!(await c.env.BUCKET.head(key))) return c.json({ error: "Not found" }, 404);
-	await c.env.BUCKET.delete(key); // TODO: also delete DO data and R2 attachment blobs
+	// Remove the mailbox's data first and the settings marker last, so a failure
+	// part-way leaves the mailbox visible and the delete can simply be retried.
+	const attachments = await c.env.MAILBOX.get(c.env.MAILBOX.idFromName(mailboxId)).purgeAll();
+	const keys = attachments.map((a) => `attachments/${a.email_id}/${a.id}/${a.filename}`);
+	for (let i = 0; i < keys.length; i += 1000) await c.env.BUCKET.delete(keys.slice(i, i + 1000));
+	try {
+		const agent = await getAgentByName(c.env.EMAIL_AGENT, mailboxId);
+		await agent.fetch(new Request("https://agents/purge", { method: "POST" }));
+	} catch (e) {
+		console.error(`Could not clear agent history for ${mailboxId}:`, (e as Error).message);
+	}
+	await c.env.BUCKET.delete(key);
 	return c.body(null, 204);
 });
 
