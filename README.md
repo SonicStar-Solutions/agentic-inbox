@@ -79,6 +79,32 @@ npm run dev
 npm run deploy
 ```
 
+### Multiple domains
+
+`DOMAINS` accepts a comma-separated list, for example `"DOMAINS": "example.com,example.org"` in `wrangler.jsonc`. The home page then shows a domain picker when you create a mailbox, and the API rejects mailboxes on domains that are not listed. Enable Email Routing (and Email Service for sending) on **each** domain and point each catch-all rule at this Worker; mail is routed to the mailbox matching the SMTP envelope recipient.
+
+### Using the HTTP API from scripts and other apps
+
+Everything the web app does goes through `/api/v1`, which is protected by Cloudflare Access like the rest of the app. For scripts, servers or mobile apps, use an [Access service token](https://developers.cloudflare.com/cloudflare-one/identity/service-tokens/):
+
+1. In Zero Trust, create a service token and copy the Client ID and Secret.
+2. Add a policy with action **Service Auth** that includes that token to the Access application for your Worker.
+3. Send the token on every request:
+
+```bash
+H1="CF-Access-Client-Id: <client-id>"; H2="CF-Access-Client-Secret: <client-secret>"
+BASE=https://your-worker.example.com/api/v1
+
+# read: list the inbox, or fetch one message
+curl -H "$H1" -H "$H2" "$BASE/mailboxes/hello@example.com/emails?folder=inbox"
+curl -H "$H1" -H "$H2" "$BASE/mailboxes/hello@example.com/emails/<id>"
+
+# send (the `from` address must be the mailbox itself)
+curl -H "$H1" -H "$H2" -H "Content-Type: application/json"   -d '{"to":"you@example.net","from":"hello@example.com","subject":"Hi","text":"Hello"}'   "$BASE/mailboxes/hello@example.com/emails"
+```
+
+A rejected send returns `502` with the provider error, and a rate-limited one returns `429`. The `/mcp` endpoint accepts the same headers. As with the web app, a valid token can reach every mailbox.
+
 ### AI models
 
 Models are defined in `workers/lib/models.ts`. Override any of them with a Worker var (see the commented examples in `wrangler.jsonc`) without changing code:
