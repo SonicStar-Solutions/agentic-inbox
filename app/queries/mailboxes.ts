@@ -27,6 +27,7 @@ export function useMailbox(mailboxId: string | undefined) {
 export function useCreateMailbox() {
 	const qc = useQueryClient();
 	return useMutation({
+		meta: { handlesOwnError: true }, // the caller shows its own error
 		mutationFn: ({ email, name }: { email: string; name: string }) =>
 			api.createMailbox(email, name),
 		onSuccess: () => {
@@ -38,6 +39,7 @@ export function useCreateMailbox() {
 export function useUpdateMailbox() {
 	const qc = useQueryClient();
 	return useMutation({
+		meta: { handlesOwnError: true }, // the caller shows its own error
 		mutationFn: ({
 			mailboxId,
 			settings,
@@ -53,6 +55,7 @@ export function useUpdateMailbox() {
 export function useDeleteMailbox() {
 	const qc = useQueryClient();
 	return useMutation({
+		meta: { handlesOwnError: true }, // the caller shows its own error
 		mutationFn: (mailboxId: string) => api.deleteMailbox(mailboxId),
 		onSuccess: () => {
 			qc.invalidateQueries({ queryKey: queryKeys.mailboxes.all });

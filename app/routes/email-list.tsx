@@ -171,6 +171,9 @@ export default function EmailListRoute() {
 	const {
 		data: emailData,
 		isFetching: isRefreshing,
+		isError: isListError,
+		error: listError,
+		refetch: refetchList,
 	} = useEmails(mailboxId, params, { refetchInterval: 30_000 });
 
 	const emails = emailData?.emails ?? [];
@@ -311,6 +314,12 @@ export default function EmailListRoute() {
 				<div className="flex-1 overflow-y-auto">
 				{isRefreshing && emails.length === 0 ? (
 					<EmailListSkeleton />
+				) : isListError && emails.length === 0 ? (
+					<div role="alert" className="flex flex-col items-center justify-center py-24 px-6 text-center">
+						<h3 className="text-base font-semibold text-kumo-default mb-1.5">Couldn't load emails</h3>
+						<p className="text-sm text-kumo-subtle max-w-xs mb-4">{listError instanceof Error && listError.message ? listError.message : "Something went wrong while loading this folder."}</p>
+						<Button variant="secondary" size="sm" onClick={() => refetchList()}>Try again</Button>
+					</div>
 				) : emails.length > 0 ? (
 						<div>
 							{emails.map((email) => {
