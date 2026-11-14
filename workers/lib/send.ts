@@ -18,6 +18,22 @@ export function normalizeMessageId(raw: unknown): string | null {
 	return id.length > 0 ? id : null;
 }
 
+export type RawDelivery = { ok: true; messageId: string } | { ok: false; error: string };
+
+/** Deliver through the binding and report the outcome without needing a request context. */
+export async function deliverRaw(
+	binding: SendEmail,
+	params: SendEmailParams,
+	fallbackMessageId: string,
+): Promise<RawDelivery> {
+	try {
+		const result = await sendEmail(binding, params);
+		return { ok: true, messageId: normalizeMessageId(result?.messageId) ?? fallbackMessageId };
+	} catch (e) {
+		return { ok: false, error: (e as Error)?.message || "unknown error" };
+	}
+}
+
 export type DeliveryResult =
 	| { ok: true; messageId: string }
 	| { ok: false; response: Response };
@@ -37,18 +53,11 @@ export async function deliverEmail(
 	params: SendEmailParams,
 	fallbackMessageId: string,
 ): Promise<DeliveryResult> {
-	try {
-		const result = await sendEmail(binding, params);
-		return {
-			ok: true,
-			messageId: normalizeMessageId(result?.messageId) ?? fallbackMessageId,
-		};
-	} catch (e) {
-		const message = (e as Error)?.message || "unknown error";
-		console.error("Email delivery failed:", message);
-		return {
-			ok: false,
-			response: c.json({ error: `Failed to send email: ${message}` }, 502),
-		};
-	}
+	const result = await deliverRaw(binding, params, fallbackMessageId);
+	if (result.ok) return result;
+	console.error("Email delivery failed:", result.error);
+	return {
+		ok: false,
+		response: c.json({ error: `Failed to send email: ${result.error}` }, 502),
+	};
 }

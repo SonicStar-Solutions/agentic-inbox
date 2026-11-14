@@ -7,6 +7,7 @@ import { FloppyDiskIcon, PaperPlaneTiltIcon, XIcon } from "@phosphor-icons/react
 import { useParams } from "react-router";
 import { useComposeForm } from "~/hooks/useComposeForm";
 import RecipientInput from "./RecipientInput";
+import ScheduleSendMenu from "./ScheduleSendMenu";
 import RichTextEditor from "./RichTextEditor";
 
 export default function ComposePanel() {
@@ -34,6 +35,11 @@ export default function ComposePanel() {
 		formTitle,
 		handleSaveDraft,
 		handleSend,
+		handleSchedule,
+		canSchedule,
+		fromAddress,
+		setFromAddress,
+		fromOptions,
 		closeCompose,
 		closePanel,
 	} = useComposeForm(mailboxId, folder);
@@ -65,6 +71,26 @@ export default function ComposePanel() {
 					{error && <Banner variant="error" text={error} />}
 
 					<div className="space-y-3">
+						{fromOptions.length > 1 && (
+							<div className="flex items-center gap-2">
+								<label htmlFor="compose-from" className="text-sm font-medium text-kumo-subtle w-14 shrink-0">
+									From
+								</label>
+								<select
+									id="compose-from"
+									value={fromOptions.includes(fromAddress) ? fromAddress : fromOptions[0]}
+									onChange={(e) => setFromAddress(e.target.value)}
+									className="h-8 flex-1 min-w-0 rounded-md border border-kumo-line bg-kumo-control px-2 text-sm text-kumo-default"
+								>
+									{fromOptions.map((addr) => (
+										<option key={addr} value={addr}>
+											{addr}
+										</option>
+									))}
+								</select>
+							</div>
+						)}
+
 						<div className="flex items-center gap-2">
 							<label className="text-sm font-medium text-kumo-subtle w-14 shrink-0">
 								To
@@ -167,6 +193,12 @@ export default function ComposePanel() {
 							>
 								{isSavingDraft ? "Saving..." : "Save as Draft"}
 							</Button>
+							{canSchedule && (
+								<ScheduleSendMenu
+									disabled={isSavingDraft || isSending}
+									onSchedule={(when) => handleSchedule(when, closePanel)}
+								/>
+							)}
 							<Button
 								type="submit"
 								variant="primary"

@@ -19,8 +19,11 @@ import {
 import { SendEmailRequestSchema } from "./lib/schemas";
 import { parseJsonBody } from "./lib/http";
 import { BulkRequestSchema } from "./lib/bulk";
+import { ScheduleRequestSchema, validateSendAt } from "./lib/scheduled";
+import { aliasesOf, resolveAlias, syncAliasIndex, validateAliases } from "./lib/aliases";
 import { isAllowedDomain, parseDomains } from "./lib/domains";
 import { isAutoDraftEnabled, readMailboxSettings, validateAgentSettings } from "./lib/mailbox-settings";
+import { resolveReceivedDate } from "./lib/received-date";
 import { logRateLimitHit } from "./lib/rate-limit";
 import { findOverlongSearchTerm, MAX_SEARCH_TERM_LENGTH } from "./lib/search";
 import { handleReplyEmail, handleForwardEmail } from "./routes/reply-forward";
@@ -120,6 +123,7 @@ app.post("/api/v1/mailboxes", async (c) => {
 	}
 	const key = `mailboxes/${email}.json`;
 	if (await c.env.BUCKET.head(key)) return c.json({ error: "Mailbox already exists" }, 409);
+	if (await resolveAlias(c.env.BUCKET, email)) return c.json({ error: "That address is already an alias of another mailbox" }, 409);
 	const defaultSettings = { fromName: name, forwarding: { enabled: false, email: "" }, signature: { enabled: false, text: "" }, autoReply: { enabled: false, subject: "", message: "" } };
 	const finalSettings = { ...defaultSettings, ...settings };
 	await c.env.BUCKET.put(key, JSON.stringify(finalSettings));
@@ -143,7 +147,11 @@ app.put("/api/v1/mailboxes/:mailboxId", async (c) => {
 	if (settingsError) return c.json({ error: settingsError }, 400);
 	const key = `mailboxes/${mailboxId}.json`;
 	if (!(await c.env.BUCKET.head(key))) return c.json({ error: "Not found" }, 404);
+	const aliasError = await validateAliases(c.env.BUCKET, mailboxId, settings.aliases, parseDomains(c.env.DOMAINS));
+	if (aliasError) return c.json({ error: aliasError }, 400);
+	const previousAliases = aliasesOf(await readMailboxSettings(c.env.BUCKET, mailboxId));
 	await c.env.BUCKET.put(key, JSON.stringify(settings));
+	await syncAliasIndex(c.env.BUCKET, mailboxId, previousAliases, aliasesOf(settings));
 	return c.json({ id: mailboxId, name: mailboxId, email: mailboxId, settings });
 });
 
@@ -151,7 +159,19 @@ app.delete("/api/v1/mailboxes/:mailboxId", async (c) => {
 	const mailboxId = c.req.param("mailboxId")!;
 	const key = `mailboxes/${mailboxId}.json`;
 	if (!(await c.env.BUCKET.head(key))) return c.json({ error: "Not found" }, 404);
-	await c.env.BUCKET.delete(key); // TODO: also delete DO data and R2 attachment blobs
+	// Remove the mailbox's data first and the settings marker last, so a failure
+	// part-way leaves the mailbox visible and the delete can simply be retried.
+	const attachments = await c.env.MAILBOX.get(c.env.MAILBOX.idFromName(mailboxId)).purgeAll();
+	const keys = attachments.map((a) => `attachments/${a.email_id}/${a.id}/${a.filename}`);
+	for (let i = 0; i < keys.length; i += 1000) await c.env.BUCKET.delete(keys.slice(i, i + 1000));
+	try {
+		const agent = await getAgentByName(c.env.EMAIL_AGENT, mailboxId);
+		await agent.fetch(new Request("https://agents/purge", { method: "POST" }));
+	} catch (e) {
+		console.error(`Could not clear agent history for ${mailboxId}:`, (e as Error).message);
+	}
+	await syncAliasIndex(c.env.BUCKET, mailboxId, aliasesOf(await readMailboxSettings(c.env.BUCKET, mailboxId)), []);
+	await c.env.BUCKET.delete(key);
 	return c.body(null, 204);
 });
 
@@ -188,7 +208,7 @@ app.post("/api/v1/mailboxes/:mailboxId/emails", async (c: AppContext) => {
 
 	let toStr: string, fromEmail: string, fromDomain: string;
 	try {
-		({ toStr, fromEmail, fromDomain } = validateSender(to, from, mailboxId));
+		({ toStr, fromEmail, fromDomain } = validateSender(to, from, mailboxId, aliasesOf(await readMailboxSettings(c.env.BUCKET, mailboxId))));
 	} catch (e) {
 		if (e instanceof SenderValidationError) return c.json({ error: e.message }, 400);
 		throw e;
@@ -288,6 +308,36 @@ app.post("/api/v1/mailboxes/:mailboxId/emails/bulk", async (c: AppContext) => {
 		await c.env.BUCKET.delete(result.attachments.map((a: any) => `attachments/${a.email_id}/${a.id}/${a.filename}`));
 	}
 	return c.json({ count: result.count });
+});
+
+// -- Scheduled sends ("send later") -----------------------------------
+
+app.post("/api/v1/mailboxes/:mailboxId/emails/schedule", async (c: AppContext) => {
+	const mailboxId = c.req.param("mailboxId")!;
+	const parsed = await parseJsonBody(c, ScheduleRequestSchema);
+	if (!parsed.ok) return parsed.response;
+	const request = parsed.data;
+
+	const when = validateSendAt(request.send_at);
+	if (!when.ok) return c.json({ error: when.error }, 400);
+	try {
+		validateSender(request.email.to, request.email.from, mailboxId, aliasesOf(await readMailboxSettings(c.env.BUCKET, mailboxId)));
+	} catch (e) {
+		if (e instanceof SenderValidationError) return c.json({ error: e.message }, 400);
+		throw e;
+	}
+	const id = crypto.randomUUID();
+	await (c.var.mailboxStub as any).scheduleEmail({ id, mailboxId, request, sendAt: when.iso });
+	return c.json({ id, status: "scheduled", send_at: when.iso }, 201);
+});
+
+app.get("/api/v1/mailboxes/:mailboxId/scheduled", async (c: AppContext) => {
+	return c.json({ scheduled: await (c.var.mailboxStub as any).listScheduled() });
+});
+
+app.delete("/api/v1/mailboxes/:mailboxId/scheduled/:id", async (c: AppContext) => {
+	const ok = await (c.var.mailboxStub as any).cancelScheduled(c.req.param("id")!);
+	return ok ? c.body(null, 204) : c.json({ error: "Not found, or already sending" }, 404);
 });
 
 app.post("/api/v1/mailboxes/:mailboxId/emails/:id/move", async (c: AppContext) => {
@@ -423,7 +473,11 @@ async function receiveEmail(event: InboundEmailEvent, env: Env, ctx: ExecutionCo
 	// and routinely names someone else (#32).
 	const envelopeTo = event.to?.trim().toLowerCase();
 	let mailboxId: string | undefined;
-	if (envelopeTo) {
+	// Mail to an alias is delivered to the mailbox that owns it (#89).
+	const aliasOwner = envelopeTo ? await resolveAlias(env.BUCKET, envelopeTo) : null;
+	if (aliasOwner) {
+		mailboxId = aliasOwner.toLowerCase();
+	} else if (envelopeTo) {
 		if (allowedAddresses.length > 0 && !allowedAddresses.includes(envelopeTo)) {
 			console.log(`Ignoring email: ${envelopeTo} is not in EMAIL_ADDRESSES.`);
 			return;
@@ -485,7 +539,7 @@ async function receiveEmail(event: InboundEmailEvent, env: Env, ctx: ExecutionCo
 		// Header To: for context (e.g. the list address); the envelope recipient when absent.
 		recipient: (allRecipients.length > 0 ? allRecipients : [mailboxId]).join(", "),
 		cc: ccRecipients.join(", ") || null, bcc: bccRecipients.join(", ") || null,
-		date: new Date().toISOString(), // uses receive time, not the email's Date header
+		date: resolveReceivedDate(parsedEmail.date), // the message's own Date when plausible, else receipt time
 		body: parsedEmail.html || parsedEmail.text || "",
 		in_reply_to: inReplyTo, email_references: emailReferences.length > 0 ? JSON.stringify(emailReferences) : null,
 		thread_id: threadId, message_id: originalMessageId, raw_headers: JSON.stringify(parsedEmail.headers),

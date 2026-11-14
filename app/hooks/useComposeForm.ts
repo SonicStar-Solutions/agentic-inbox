@@ -14,6 +14,8 @@ import {
 	stripHtml,
 	toEmailListValue,
 } from "~/lib/utils";
+import { pendingSends } from "~/lib/pending-send";
+import { useScheduleEmail } from "~/queries/scheduled";
 import { useDeleteEmail, useForwardEmail, useReplyToEmail, useSaveDraft, useSendEmail } from "~/queries/emails";
 import { useMailbox } from "~/queries/mailboxes";
 import { useUIStore } from "~/hooks/useUIStore";
@@ -164,18 +166,20 @@ function buildInitialComposeFields(
 
 export function useComposeForm(mailboxId?: string, _folder?: string) {
 	const toastManager = useKumoToastManager();
-	const { composeOptions, closePanel, closeCompose } = useUIStore();
+	const { composeOptions, closePanel, closeCompose, startCompose } = useUIStore();
 	const { data: currentMailbox } = useMailbox(mailboxId);
 	const sendEmailMutation = useSendEmail();
 	const saveDraftMutation = useSaveDraft();
 	const replyMutation = useReplyToEmail();
 	const forwardMutation = useForwardEmail();
 	const deleteEmailMutation = useDeleteEmail();
+	const scheduleMutation = useScheduleEmail();
 
 	const [to, setTo] = useState("");
 	const [cc, setCc] = useState("");
 	const [bcc, setBcc] = useState("");
 	const [showCcBcc, setShowCcBcc] = useState(false);
+	const [fromAddress, setFromAddress] = useState("");
 	const [subject, setSubject] = useState("");
 	const [body, setBody] = useState("");
 	const [error, setError] = useState<string | null>(null);
@@ -188,6 +192,20 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 		if (isDraftEdit) return "Edit Draft";
 		switch (composeOptions.mode) { case "reply": return "Reply"; case "reply-all": return "Reply All"; case "forward": return "Forward"; default: return "New Message"; }
 	}, [composeOptions.mode, isDraftEdit]);
+
+	// "From" choices (#89): the mailbox itself plus its aliases.
+	const fromOptions = useMemo(
+		() => (currentMailbox ? [currentMailbox.email, ...(currentMailbox.settings?.aliases ?? [])] : []),
+		[currentMailbox],
+	);
+	// Replying to mail that was sent to an alias defaults to answering from it.
+	useEffect(() => {
+		if (!currentMailbox) return;
+		const original = composeOptions.originalEmail ?? composeOptions.draftEmail;
+		const addressedTo = [...splitEmailList(original?.recipient ?? ""), ...splitEmailList(original?.cc ?? "")].map((a) => a.toLowerCase());
+		const alias = (currentMailbox.settings?.aliases ?? []).find((a) => addressedTo.includes(a.toLowerCase()));
+		setFromAddress(alias && composeOptions.originalEmail ? alias : currentMailbox.email);
+	}, [composeOptions, currentMailbox]);
 
 	const sigBlock = useMemo(() => getSignatureBlock(currentMailbox?.settings), [currentMailbox]);
 
@@ -239,7 +257,8 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 		if (toRecipients.length === 0) { setError("Add at least one recipient."); return; }
 		const ccRecipients = splitEmailList(cc); const bccRecipients = splitEmailList(bcc);
 		const fromName = currentMailbox.settings?.fromName || currentMailbox.name;
-		const from = fromName && fromName !== currentMailbox.email ? { email: currentMailbox.email, name: fromName } : currentMailbox.email;
+		const sendAs = fromOptions.includes(fromAddress) ? fromAddress : currentMailbox.email;
+		const from = fromName && fromName !== sendAs ? { email: sendAs, name: fromName } : sendAs;
 		const emailData = {
 			to: toEmailListValue(toRecipients),
 			cc: toEmailListValue(ccRecipients),
@@ -250,17 +269,72 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 			text: htmlToPlainText(body),
 		};
 		const draftId = composeOptions.draftEmail?.id; const mode = composeOptions.mode; const originalId = composeOptions.originalEmail?.id || composeOptions.draftEmail?.in_reply_to;
-		setIsSending(true); toastManager.add({ title: "Sending email..." });
-		try {
-			if ((mode === "reply" || mode === "reply-all") && originalId) await replyMutation.mutateAsync({ mailboxId, emailId: originalId, email: emailData });
-			else if (mode === "forward" && originalId) await forwardMutation.mutateAsync({ mailboxId, emailId: originalId, email: emailData });
-			else await sendEmailMutation.mutateAsync({ mailboxId, email: emailData });
-			if (draftId) deleteEmailMutation.mutate({ mailboxId, id: draftId });
-			toastManager.add({ title: "Email sent!" });
-			onClose();
-		} catch (err: unknown) { const message = (err instanceof Error ? err.message : null) || "Failed to send email."; setError(message); toastManager.add({ title: message, variant: "error" }); }
-		finally { setIsSending(false); }
+		// Undo send (#89): hold the message for a few seconds. The composer closes at
+		// once; Undo (or a failed send) reopens it with everything the user typed.
+		const restore = (restoreError?: string) => {
+			const base = composeOptions.draftEmail;
+			startCompose({
+				...composeOptions,
+				draftEmail: {
+					...(base ?? { id: "", sender: currentMailbox.email, date: new Date().toISOString(), read: true, starred: false }),
+					recipient: to, cc, bcc, subject, body,
+				},
+			});
+			if (restoreError) toastManager.add({ title: restoreError, variant: "error" });
+		};
+		const label = toRecipients.length === 1 ? `to ${toRecipients[0]}` : `to ${toRecipients.length} recipients`;
+		pendingSends.queue(
+			label,
+			async () => {
+				try {
+					if ((mode === "reply" || mode === "reply-all") && originalId) await replyMutation.mutateAsync({ mailboxId, emailId: originalId, email: emailData });
+					else if (mode === "forward" && originalId) await forwardMutation.mutateAsync({ mailboxId, emailId: originalId, email: emailData });
+					else await sendEmailMutation.mutateAsync({ mailboxId, email: emailData });
+					if (draftId) deleteEmailMutation.mutate({ mailboxId, id: draftId });
+					toastManager.add({ title: "Email sent!" });
+				} catch (err: unknown) {
+					restore((err instanceof Error ? err.message : null) || "Failed to send email.");
+				}
+			},
+			() => restore(),
+		);
+		onClose();
 	};
 
-	return { to, setTo, cc, setCc, bcc, setBcc, showCcBcc, setShowCcBcc, subject, setSubject, body, setBody, error, setError, isSavingDraft, isSending, formTitle, handleSaveDraft, handleSend, closeCompose, closePanel };
+	/** Send later (#89): the server sends it at the chosen time, even with the browser closed. */
+	const handleSchedule = async (when: Date, onClose: () => void) => {
+		if (isSending) return; setError(null);
+		if (!currentMailbox || !mailboxId) { setError("No mailbox selected."); return; }
+		const toRecipients = splitEmailList(to);
+		if (toRecipients.length === 0) { setError("Add at least one recipient."); return; }
+		if (!subject.trim()) { setError("Add a subject."); return; }
+		const mode = composeOptions.mode;
+		const originalId = composeOptions.originalEmail?.id || composeOptions.draftEmail?.in_reply_to;
+		const isReply = (mode === "reply" || mode === "reply-all") && !!originalId;
+		const fromName = currentMailbox.settings?.fromName || currentMailbox.name;
+		const sendAs = fromOptions.includes(fromAddress) ? fromAddress : currentMailbox.email;
+		const from = fromName && fromName !== sendAs ? { email: sendAs, name: fromName } : sendAs;
+		const email = {
+			to: toEmailListValue(toRecipients),
+			cc: toEmailListValue(splitEmailList(cc)),
+			bcc: toEmailListValue(splitEmailList(bcc)),
+			from, subject, html: body, text: htmlToPlainText(body),
+		};
+		setIsSending(true);
+		try {
+			await scheduleMutation.mutateAsync({
+				mailboxId,
+				request: { kind: isReply ? "reply" : "compose", ...(isReply ? { originalEmailId: originalId } : {}), send_at: when.toISOString(), email },
+			});
+			const draftId = composeOptions.draftEmail?.id;
+			if (draftId) deleteEmailMutation.mutate({ mailboxId, id: draftId });
+			toastManager.add({ title: `Scheduled for ${when.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}` });
+			onClose();
+		} catch (err: unknown) {
+			const message = (err instanceof Error ? err.message : null) || "Failed to schedule email.";
+			setError(message); toastManager.add({ title: message, variant: "error" });
+		} finally { setIsSending(false); }
+	};
+
+	return { fromAddress, setFromAddress, fromOptions, handleSchedule, canSchedule: composeOptions.mode !== "forward", to, setTo, cc, setCc, bcc, setBcc, showCcBcc, setShowCcBcc, subject, setSubject, body, setBody, error, setError, isSavingDraft, isSending, formTitle, handleSaveDraft, handleSend, closeCompose, closePanel };
 }

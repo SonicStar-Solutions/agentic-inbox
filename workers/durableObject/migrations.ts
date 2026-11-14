@@ -168,4 +168,21 @@ export const mailboxMigrations: Migration[] = [
             CREATE INDEX IF NOT EXISTS idx_emails_folder_date ON emails(folder_id, date DESC);
         `,
 	},
+	{
+		// Scheduled sends (#89). Idempotent, so no transaction wrapper.
+		name: "9_scheduled_emails",
+		sql: `
+            CREATE TABLE IF NOT EXISTS scheduled_emails (
+                id TEXT PRIMARY KEY,
+                kind TEXT NOT NULL,
+                original_email_id TEXT,
+                payload TEXT NOT NULL,
+                send_at TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                error TEXT,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_scheduled_due ON scheduled_emails(status, send_at);
+        `,
+	},
 ];

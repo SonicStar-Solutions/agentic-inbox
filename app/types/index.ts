@@ -18,6 +18,8 @@ export interface MailboxSettings {
 	autoDraft?: { enabled: boolean };
 	/** Workers AI model override for this mailbox, e.g. @cf/moonshotai/kimi-k2.5. */
 	agentModel?: string;
+	/** Extra addresses this mailbox receives at and can send from. */
+	aliases?: string[];
 }
 
 export interface Mailbox {

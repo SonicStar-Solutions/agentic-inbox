@@ -115,6 +115,13 @@ const api = {
 		get<EmailListResponse | Email[]>(`/api/v1/mailboxes/${mailboxId}/emails`, { params, signal: opts?.signal }),
 	sendEmail: (mailboxId: string, email: unknown) =>
 		post<void>(`/api/v1/mailboxes/${mailboxId}/emails`, email),
+	scheduleEmail: (mailboxId: string, body: unknown) =>
+		post<{ id: string; send_at: string }>(`/api/v1/mailboxes/${mailboxId}/emails/schedule`, body),
+	listScheduled: async (mailboxId: string) => {
+		const res = await get<{ scheduled: import("~/queries/scheduled").ScheduledItem[] }>(`/api/v1/mailboxes/${mailboxId}/scheduled`);
+		return res?.scheduled ?? [];
+	},
+	cancelScheduled: (mailboxId: string, id: string) => del<void>(`/api/v1/mailboxes/${mailboxId}/scheduled/${id}`),
 	bulkEmails: (mailboxId: string, body: unknown) =>
 		post<{ count: number }>(`/api/v1/mailboxes/${mailboxId}/emails/bulk`, body),
 	getContacts: async (mailboxId: string, q: string, limit = 8) => {

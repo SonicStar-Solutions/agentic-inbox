@@ -20,6 +20,10 @@ export default function SettingsRoute() {
 
 	const [displayName, setDisplayName] = useState("");
 	const [agentPrompt, setAgentPrompt] = useState("");
+	const [aliases, setAliases] = useState<string[]>([]);
+	const [aliasInput, setAliasInput] = useState("");
+	const [sigEnabled, setSigEnabled] = useState(false);
+	const [sigText, setSigText] = useState("");
 	const [autoDraft, setAutoDraft] = useState(true);
 	const [agentModel, setAgentModel] = useState("");
 	const [isSaving, setIsSaving] = useState(false);
@@ -28,6 +32,9 @@ export default function SettingsRoute() {
 		if (mailbox) {
 			setDisplayName(mailbox.settings?.fromName || mailbox.name || "");
 			setAgentPrompt(mailbox.settings?.agentSystemPrompt || "");
+			setAliases(mailbox.settings?.aliases ?? []);
+			setSigEnabled(Boolean(mailbox.settings?.signature?.enabled));
+			setSigText(mailbox.settings?.signature?.text || "");
 			setAutoDraft(mailbox.settings?.autoDraft?.enabled !== false);
 			setAgentModel(mailbox.settings?.agentModel || "");
 		}
@@ -40,6 +47,8 @@ export default function SettingsRoute() {
 			...mailbox.settings,
 			fromName: displayName,
 			agentSystemPrompt: agentPrompt.trim() || undefined,
+			aliases,
+			signature: { ...mailbox.settings?.signature, enabled: sigEnabled, text: sigText },
 			autoDraft: { enabled: autoDraft },
 			agentModel: agentModel.trim() || undefined,
 		};
@@ -54,6 +63,20 @@ export default function SettingsRoute() {
 		} finally {
 			setIsSaving(false);
 		}
+	};
+
+	const addAlias = () => {
+		const alias = aliasInput.trim().toLowerCase();
+		if (!/^[^s@]+@[^s@]+.[^s@]+$/.test(alias)) {
+			toastManager.add({ title: "Enter a valid email address", variant: "error" });
+			return;
+		}
+		if (alias === mailbox?.email.toLowerCase() || aliases.includes(alias)) {
+			toastManager.add({ title: "That address is already in use here", variant: "error" });
+			return;
+		}
+		setAliases((list) => [...list, alias]);
+		setAliasInput("");
 	};
 
 	const handleResetPrompt = () => {
@@ -88,6 +111,80 @@ export default function SettingsRoute() {
 						/>
 						<Input label="Email" type="email" value={mailbox.email} disabled />
 					</div>
+				</div>
+
+				{/* Aliases */}
+				<div className="rounded-lg border border-kumo-line bg-kumo-base p-5">
+					<div className="text-sm font-medium text-kumo-default mb-1">Aliases</div>
+					<p className="text-xs text-kumo-subtle mb-3">
+						Extra addresses on your domains that deliver to this mailbox. You can choose one as the
+						From address when composing. Route each address to this Worker in Email Routing.
+					</p>
+					<div className="flex flex-wrap gap-2 mb-3">
+						{aliases.length === 0 && <span className="text-xs text-kumo-subtle">No aliases yet.</span>}
+						{aliases.map((a) => (
+							<span key={a} className="inline-flex items-center gap-1 rounded-full bg-kumo-fill px-2.5 py-1 text-xs text-kumo-default">
+								{a}
+								<button
+									type="button"
+									onClick={() => setAliases((list) => list.filter((x) => x !== a))}
+									aria-label={`Remove alias ${a}`}
+									className="text-kumo-subtle hover:text-kumo-default"
+								>
+									×
+								</button>
+							</span>
+						))}
+					</div>
+					<div className="flex items-end gap-2">
+						<div className="flex-1">
+							<Input
+								label="Add an alias"
+								type="email"
+								value={aliasInput}
+								placeholder="sales@yourdomain.com"
+								onChange={(e) => setAliasInput(e.target.value)}
+								onKeyDown={(e) => {
+									if (e.key === "Enter") {
+										e.preventDefault();
+										addAlias();
+									}
+								}}
+							/>
+						</div>
+						<Button variant="secondary" size="sm" onClick={addAlias} disabled={!aliasInput.trim()}>
+							Add
+						</Button>
+					</div>
+				</div>
+
+				{/* Signature */}
+				<div className="rounded-lg border border-kumo-line bg-kumo-base p-5">
+					<div className="text-sm font-medium text-kumo-default mb-4">Signature</div>
+					<label className="flex items-center gap-3 cursor-pointer">
+						<input
+							type="checkbox"
+							checked={sigEnabled}
+							onChange={(e) => setSigEnabled(e.target.checked)}
+							className="h-4 w-4"
+						/>
+						<span className="text-sm text-kumo-default">Add a signature to new messages and replies</span>
+					</label>
+					{mailbox.settings?.signature?.html ? (
+						<p className="text-xs text-kumo-subtle mt-3">
+							This mailbox has an HTML signature set through the API, which takes precedence
+							over the text below.
+						</p>
+					) : null}
+					<textarea
+						value={sigText}
+						onChange={(e) => setSigText(e.target.value)}
+						placeholder={"Best regards,\nYour Name"}
+						rows={4}
+						disabled={!sigEnabled}
+						aria-label="Signature text"
+						className="mt-3 w-full resize-y rounded-lg border border-kumo-line bg-kumo-recessed px-3 py-2 text-sm text-kumo-default placeholder:text-kumo-subtle focus:outline-none focus:ring-1 focus:ring-kumo-ring disabled:opacity-50"
+					/>
 				</div>
 
 				{/* Auto-draft and model */}
