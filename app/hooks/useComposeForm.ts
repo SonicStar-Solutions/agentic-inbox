@@ -179,6 +179,7 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 	const [cc, setCc] = useState("");
 	const [bcc, setBcc] = useState("");
 	const [showCcBcc, setShowCcBcc] = useState(false);
+	const [fromAddress, setFromAddress] = useState("");
 	const [subject, setSubject] = useState("");
 	const [body, setBody] = useState("");
 	const [error, setError] = useState<string | null>(null);
@@ -191,6 +192,20 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 		if (isDraftEdit) return "Edit Draft";
 		switch (composeOptions.mode) { case "reply": return "Reply"; case "reply-all": return "Reply All"; case "forward": return "Forward"; default: return "New Message"; }
 	}, [composeOptions.mode, isDraftEdit]);
+
+	// "From" choices (#89): the mailbox itself plus its aliases.
+	const fromOptions = useMemo(
+		() => (currentMailbox ? [currentMailbox.email, ...(currentMailbox.settings?.aliases ?? [])] : []),
+		[currentMailbox],
+	);
+	// Replying to mail that was sent to an alias defaults to answering from it.
+	useEffect(() => {
+		if (!currentMailbox) return;
+		const original = composeOptions.originalEmail ?? composeOptions.draftEmail;
+		const addressedTo = [...splitEmailList(original?.recipient ?? ""), ...splitEmailList(original?.cc ?? "")].map((a) => a.toLowerCase());
+		const alias = (currentMailbox.settings?.aliases ?? []).find((a) => addressedTo.includes(a.toLowerCase()));
+		setFromAddress(alias && composeOptions.originalEmail ? alias : currentMailbox.email);
+	}, [composeOptions, currentMailbox]);
 
 	const sigBlock = useMemo(() => getSignatureBlock(currentMailbox?.settings), [currentMailbox]);
 
@@ -242,7 +257,8 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 		if (toRecipients.length === 0) { setError("Add at least one recipient."); return; }
 		const ccRecipients = splitEmailList(cc); const bccRecipients = splitEmailList(bcc);
 		const fromName = currentMailbox.settings?.fromName || currentMailbox.name;
-		const from = fromName && fromName !== currentMailbox.email ? { email: currentMailbox.email, name: fromName } : currentMailbox.email;
+		const sendAs = fromOptions.includes(fromAddress) ? fromAddress : currentMailbox.email;
+		const from = fromName && fromName !== sendAs ? { email: sendAs, name: fromName } : sendAs;
 		const emailData = {
 			to: toEmailListValue(toRecipients),
 			cc: toEmailListValue(ccRecipients),
@@ -296,7 +312,8 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 		const originalId = composeOptions.originalEmail?.id || composeOptions.draftEmail?.in_reply_to;
 		const isReply = (mode === "reply" || mode === "reply-all") && !!originalId;
 		const fromName = currentMailbox.settings?.fromName || currentMailbox.name;
-		const from = fromName && fromName !== currentMailbox.email ? { email: currentMailbox.email, name: fromName } : currentMailbox.email;
+		const sendAs = fromOptions.includes(fromAddress) ? fromAddress : currentMailbox.email;
+		const from = fromName && fromName !== sendAs ? { email: sendAs, name: fromName } : sendAs;
 		const email = {
 			to: toEmailListValue(toRecipients),
 			cc: toEmailListValue(splitEmailList(cc)),
@@ -319,5 +336,5 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 		} finally { setIsSending(false); }
 	};
 
-	return { handleSchedule, canSchedule: composeOptions.mode !== "forward", to, setTo, cc, setCc, bcc, setBcc, showCcBcc, setShowCcBcc, subject, setSubject, body, setBody, error, setError, isSavingDraft, isSending, formTitle, handleSaveDraft, handleSend, closeCompose, closePanel };
+	return { fromAddress, setFromAddress, fromOptions, handleSchedule, canSchedule: composeOptions.mode !== "forward", to, setTo, cc, setCc, bcc, setBcc, showCcBcc, setShowCcBcc, subject, setSubject, body, setBody, error, setError, isSavingDraft, isSending, formTitle, handleSaveDraft, handleSend, closeCompose, closePanel };
 }
