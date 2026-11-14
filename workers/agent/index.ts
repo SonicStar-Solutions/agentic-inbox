@@ -14,6 +14,7 @@ import { z } from "zod";
 import type { EmailFull, EmailMetadata } from "../lib/schemas";
 import { verifyDraft, isPromptInjection } from "../lib/ai";
 import { resolveModel } from "../lib/models";
+import { parseViewContext, viewContextPrompt } from "../lib/agent-context";
 import { isAutoDraftEnabled, modelForMailbox, readMailboxSettings } from "../lib/mailbox-settings";
 import { analyzeAutoDraftSteps, autoDraftChatSummary, shouldSaveInlineDraft } from "../lib/auto-draft";
 import {
@@ -280,13 +281,23 @@ function createEmailTools(env: Env, mailboxId: string) {
 // SEND_EMAIL binding shape and the AIChatAgent constraint.  The actual env
 // is fully typed inside the tools via the closure.
 export class EmailAgent extends AIChatAgent<any> {
-	async onChatMessage(onFinish: any) {
+	async onChatMessage(onFinish: any, options?: { body?: Record<string, unknown> }) {
 		const env = this.env as Env;
 		const mailboxId = this.name;
 		const workersai = createWorkersAI({ binding: env.AI });
 		const tools = createEmailTools(env, mailboxId);
 		const settings = await readMailboxSettings(env.BUCKET, mailboxId);
-		const systemPrompt = getSystemPrompt(settings);
+
+		// What the operator has open (#89). Verified against the mailbox so a made-up
+		// id is ignored; only ids reach the prompt (see lib/agent-context).
+		let viewContext = parseViewContext(options?.body);
+		let viewThreadId: string | null = null;
+		if (viewContext) {
+			const opened = (await getMailboxStub(env, mailboxId).getEmail(viewContext.selectedEmailId)) as EmailFull | null;
+			if (opened) viewThreadId = opened.thread_id ?? null;
+			else viewContext = null;
+		}
+		const systemPrompt = getSystemPrompt(settings) + viewContextPrompt(viewContext, viewThreadId);
 
 		const result = streamText({
 			model: workersai(modelForMailbox(env, settings, "agent")),

@@ -10,9 +10,7 @@ export interface SignatureSettings {
 
 export interface MailboxSettings {
 	fromName?: string;
-	forwarding?: { enabled: boolean; email: string };
 	signature?: SignatureSettings;
-	autoReply?: { enabled: boolean; subject: string; message: string };
 	agentSystemPrompt?: string;
 	/** Draft a reply automatically when mail arrives (default on). */
 	autoDraft?: { enabled: boolean };
@@ -27,6 +25,14 @@ export interface Mailbox {
 	email: string;
 	name: string;
 	settings?: MailboxSettings;
+}
+
+export interface Label {
+	id: string;
+	name: string;
+	color: string;
+	/** Messages carrying the label (not in Trash); only on the label list. */
+	count?: number;
 }
 
 export interface Email {
@@ -48,6 +54,7 @@ export interface Email {
 	raw_headers?: string | null;
 	attachments?: Attachment[];
 	snippet?: string | null;
+	labels?: Label[];
 	// Thread aggregate fields (only present in threaded list view)
 	thread_count?: number;
 	thread_unread_count?: number;

@@ -18,6 +18,7 @@ import { aliasesOf } from "../lib/aliases";
 import { readMailboxSettings } from "../lib/mailbox-settings";
 import type { ScheduleRequest, ScheduledEmailSummary } from "../lib/scheduled";
 import type { EmailFull } from "../lib/schemas";
+import { attachLabels, labelIdFromName, MAX_LABELS, type Label, type LabelColor, type LabelWithCount } from "../lib/labels";
 import { buildBulkWhere, type BulkRequest } from "../lib/bulk";
 import { buildContacts, type Contact, type ContactSource } from "../lib/contacts";
 
@@ -70,6 +71,8 @@ interface SearchFilterOptions {
 	is_read?: boolean;
 	is_starred?: boolean;
 	has_attachment?: boolean;
+	/** One result per conversation (the newest matching message), with the number of matches. */
+	group_by_thread?: boolean;
 }
 
 interface GetEmailsOptions {
@@ -118,6 +121,50 @@ export class MailboxDO extends DurableObject<Env> {
 		this.db = drizzle(this.ctx.storage, { schema });
 		applyMigrations(this.ctx.storage.sql, mailboxMigrations, this.ctx.storage);
 		this.#fts = this.#setupFts();
+	}
+
+	// ── Live updates (#89) ─────────────────────────────────────────
+
+	/** Browsers connect here (via /api/v1/mailboxes/:id/events) to hear about changes. */
+	async fetch(request: Request): Promise<Response> {
+		if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
+			return new Response("Expected a WebSocket upgrade", { status: 426 });
+		}
+		const pair = new WebSocketPair();
+		// Hibernation API: the object can be evicted while sockets stay connected.
+		this.ctx.acceptWebSocket(pair[1]);
+		return new Response(null, { status: 101, webSocket: pair[0] });
+	}
+
+	async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+		// Keep-alive from the client
+		if (message === "ping") ws.send("pong");
+	}
+
+	async webSocketClose(ws: WebSocket, code: number): Promise<void> {
+		try {
+			ws.close(code === 1005 ? 1000 : code);
+		} catch {
+			// already closed
+		}
+	}
+
+	/** Tell connected browsers that something changed so they refetch. Never throws. */
+	#notify(scope: "emails" | "folders" | "scheduled" | "all"): void {
+		try {
+			const sockets = this.ctx.getWebSockets();
+			if (sockets.length === 0) return;
+			const message = JSON.stringify({ type: "changed", scope });
+			for (const ws of sockets) {
+				try {
+					ws.send(message);
+				} catch {
+					// a socket that just closed
+				}
+			}
+		} catch {
+			// notifications are best effort
+		}
 	}
 
 	/** True when the FTS5 index exists and search can use it (#89). */
@@ -540,6 +587,7 @@ export class MailboxDO extends DurableObject<Env> {
 		id: string,
 		{ read, starred }: { read?: boolean; starred?: boolean },
 	) {
+		this.#notify("emails");
 		const data: { read?: number; starred?: number } = {};
 		if (read !== undefined) {
 			data.read = read ? 1 : 0;
@@ -562,6 +610,7 @@ export class MailboxDO extends DurableObject<Env> {
 	}
 
 	async markThreadRead(threadId: string) {
+		this.#notify("emails");
 		this.ctx.storage.sql.exec(
 			`UPDATE emails SET read = 1 WHERE thread_id = ? AND read = 0`,
 			threadId,
@@ -570,6 +619,7 @@ export class MailboxDO extends DurableObject<Env> {
 	}
 
 	async deleteEmail(id: string) {
+		this.#notify("emails");
 		const email = this.db
 			.select({ id: schema.emails.id })
 			.from(schema.emails)
@@ -622,6 +672,7 @@ export class MailboxDO extends DurableObject<Env> {
 	}
 
 	async createFolder(id: string, name: string, is_deletable: number = 1) {
+		this.#notify("folders");
 		try {
 			const result = this.db
 				.insert(schema.folders)
@@ -638,6 +689,15 @@ export class MailboxDO extends DurableObject<Env> {
 	}
 
 	async updateFolder(id: string, name: string) {
+		this.#notify("folders");
+		// Only custom folders can be renamed; Inbox, Sent, etc. keep their names (#89).
+		const existing = this.db
+			.select({ is_deletable: schema.folders.is_deletable })
+			.from(schema.folders)
+			.where(eq(schema.folders.id, id))
+			.get();
+		if (!existing || existing.is_deletable === 0) return undefined;
+
 		const result = this.db
 			.update(schema.folders)
 			.set({ name })
@@ -648,6 +708,7 @@ export class MailboxDO extends DurableObject<Env> {
 	}
 
 	async deleteFolder(id: string) {
+		this.#notify("all");
 		const folder = this.db
 			.select({ is_deletable: schema.folders.is_deletable })
 			.from(schema.folders)
@@ -658,6 +719,10 @@ export class MailboxDO extends DurableObject<Env> {
 			return false;
 		}
 
+		// Deleting a folder must not delete its mail (the foreign key cascades):
+		// move the messages to Archive first (#89).
+		this.ctx.storage.sql.exec(`UPDATE emails SET folder_id = ? WHERE folder_id = ?`, Folders.ARCHIVE, id);
+
 		this.db
 			.delete(schema.folders)
 			.where(eq(schema.folders.id, id))
@@ -667,6 +732,7 @@ export class MailboxDO extends DurableObject<Env> {
 	}
 
 	async moveEmail(id: string, folderId: string) {
+		this.#notify("emails");
 		const folder = this.db
 			.select({ id: schema.folders.id })
 			.from(schema.folders)
@@ -751,7 +817,24 @@ export class MailboxDO extends DurableObject<Env> {
 		const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 		const offset = (page - 1) * limit;
 
-		const query = `
+		// Grouped by conversation (#89): newest matching message per thread, and how
+		// many messages of the thread matched.
+		const query = options.group_by_thread
+			? `
+			SELECT * FROM (
+				SELECT e.id, e.subject, e.sender, e.recipient, e.cc, e.bcc, e.date,
+					e.read, e.starred, e.in_reply_to, e.email_references,
+					e.thread_id, e.folder_id,
+					SUBSTR(e.body, 1, 300) as snippet,
+					f.name as folder_name,
+					ROW_NUMBER() OVER (PARTITION BY COALESCE(e.thread_id, e.id) ORDER BY e.date DESC) AS rn,
+					COUNT(*) OVER (PARTITION BY COALESCE(e.thread_id, e.id)) AS thread_count
+				FROM emails e
+				LEFT JOIN folders f ON e.folder_id = f.id
+				${where}
+			) WHERE rn = 1
+			ORDER BY date DESC LIMIT ?${params.length + 1} OFFSET ?${params.length + 2}`
+			: `
 			SELECT e.id, e.subject, e.sender, e.recipient, e.cc, e.bcc, e.date,
 				e.read, e.starred, e.in_reply_to, e.email_references,
 				e.thread_id, e.folder_id,
@@ -778,7 +861,9 @@ export class MailboxDO extends DurableObject<Env> {
 		const { conditions, params } = this.#buildSearchConditions(options);
 
 		const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-		const query = `SELECT COUNT(*) as total FROM emails ${where}`;
+		const query = options.group_by_thread
+			? `SELECT COUNT(DISTINCT COALESCE(thread_id, id)) as total FROM emails ${where}`
+			: `SELECT COUNT(*) as total FROM emails ${where}`;
 
 		const row = [...this.ctx.storage.sql.exec(query, ...params)][0] as
 			| { total: number }
@@ -857,6 +942,7 @@ export class MailboxDO extends DurableObject<Env> {
 	// ── Scheduled sends ("send later") ─────────────────────────────
 
 	async scheduleEmail(item: { id: string; mailboxId: string; request: ScheduleRequest; sendAt: string }): Promise<string> {
+		this.#notify("scheduled");
 		this.ctx.storage.sql.exec(
 			`INSERT INTO scheduled_emails (id, kind, original_email_id, payload, send_at, status, updated_at)
 			 VALUES (?, ?, ?, ?, ?, 'pending', ?)`,
@@ -893,6 +979,7 @@ export class MailboxDO extends DurableObject<Env> {
 
 	/** Cancel a scheduled message. A message that is mid-send can't be cancelled. */
 	async cancelScheduled(id: string): Promise<boolean> {
+		this.#notify("scheduled");
 		const row = [...this.ctx.storage.sql.exec(`SELECT status FROM scheduled_emails WHERE id = ?`, id)][0] as { status: string } | undefined;
 		if (!row || row.status === "sending") return false;
 		this.ctx.storage.sql.exec(`DELETE FROM scheduled_emails WHERE id = ?`, id);
@@ -943,6 +1030,7 @@ export class MailboxDO extends DurableObject<Env> {
 				sql.exec(`UPDATE scheduled_emails SET status = 'failed', error = ?, updated_at = ? WHERE id = ?`, message, new Date().toISOString(), row.id);
 			}
 		}
+		if (due.length > 0) this.#notify("scheduled");
 	}
 
 	/** Send one scheduled message and file it in Sent (compose or reply). Throws on failure. */
@@ -1010,6 +1098,7 @@ export class MailboxDO extends DurableObject<Env> {
 	 * the same address can be created again.
 	 */
 	async purgeAll(): Promise<{ email_id: string; id: string; filename: string }[]> {
+		this.#notify("all");
 		const attachments = [
 			...this.ctx.storage.sql.exec(`SELECT email_id, id, filename FROM attachments`),
 		] as unknown as { email_id: string; id: string; filename: string }[];
@@ -1019,11 +1108,129 @@ export class MailboxDO extends DurableObject<Env> {
 		return attachments;
 	}
 
+	// ── Labels ─────────────────────────────────────────────────────
+
+	async listLabels(): Promise<LabelWithCount[]> {
+		const rows = [
+			...this.ctx.storage.sql.exec(
+				`SELECT l.id, l.name, l.color,
+				        (SELECT COUNT(*) FROM email_labels el JOIN emails e ON e.id = el.email_id
+				          WHERE el.label_id = l.id AND e.folder_id != 'trash') AS count
+				 FROM labels l ORDER BY l.name COLLATE NOCASE ASC`,
+			),
+		] as any[];
+		return rows.map((r) => ({ id: r.id, name: r.name, color: r.color, count: Number(r.count) }));
+	}
+
+	async createLabel(name: string, color: LabelColor): Promise<Label | { error: string }> {
+		const sql = this.ctx.storage.sql;
+		const total = Number(([...sql.exec(`SELECT COUNT(*) AS n FROM labels`)][0] as { n: number }).n);
+		if (total >= MAX_LABELS) return { error: `A mailbox can have at most ${MAX_LABELS} labels` };
+		if ([...sql.exec(`SELECT 1 FROM labels WHERE name = ?`, name)].length > 0) {
+			return { error: "A label with this name already exists" };
+		}
+		// Two different names can slug to the same id ("A b" and "a-b"); add a suffix.
+		const base = labelIdFromName(name);
+		let id = base;
+		for (let i = 2; [...sql.exec(`SELECT 1 FROM labels WHERE id = ?`, id)].length > 0; i++) id = `${base}-${i}`;
+		sql.exec(`INSERT INTO labels (id, name, color, created_at) VALUES (?, ?, ?, ?)`, id, name, color, new Date().toISOString());
+		this.#notify("all");
+		return { id, name, color };
+	}
+
+	async updateLabel(id: string, patch: { name?: string; color?: LabelColor }): Promise<Label | { error: string } | null> {
+		const sql = this.ctx.storage.sql;
+		const current = [...sql.exec(`SELECT id, name, color FROM labels WHERE id = ?`, id)][0] as unknown as Label | undefined;
+		if (!current) return null;
+		if (patch.name !== undefined && patch.name.toLowerCase() !== current.name.toLowerCase()) {
+			if ([...sql.exec(`SELECT 1 FROM labels WHERE name = ? AND id != ?`, patch.name, id)].length > 0) {
+				return { error: "A label with this name already exists" };
+			}
+		}
+		const next = { id, name: patch.name ?? current.name, color: (patch.color ?? current.color) as LabelColor };
+		sql.exec(`UPDATE labels SET name = ?, color = ? WHERE id = ?`, next.name, next.color, id);
+		this.#notify("all");
+		return next;
+	}
+
+	async deleteLabel(id: string): Promise<boolean> {
+		const sql = this.ctx.storage.sql;
+		if ([...sql.exec(`SELECT 1 FROM labels WHERE id = ?`, id)].length === 0) return false;
+		sql.exec(`DELETE FROM email_labels WHERE label_id = ?`, id);
+		sql.exec(`DELETE FROM labels WHERE id = ?`, id);
+		this.#notify("all");
+		return true;
+	}
+
+	/** Attach `labels` to list rows (by message, and by thread for conversation rows). */
+	async withLabels<T extends { id: string; thread_id?: string | null }>(rows: T[]): Promise<(T & { labels: Label[] })[]> {
+		if (rows.length === 0) return [];
+		const sql = this.ctx.storage.sql;
+		const byEmail = new Map<string, Label[]>();
+		const byThread = new Map<string, Label[]>();
+		const push = (map: Map<string, Label[]>, key: string, label: Label) => {
+			const list = map.get(key) ?? [];
+			if (!list.some((l) => l.id === label.id)) list.push(label);
+			map.set(key, list);
+		};
+
+		const ids = [...new Set(rows.map((r) => r.id))];
+		const threadIds = [...new Set(rows.map((r) => r.thread_id).filter((t): t is string => !!t))];
+		for (let i = 0; i < ids.length; i += 100) {
+			const chunk = ids.slice(i, i + 100);
+			const found = [
+				...sql.exec(
+					`SELECT el.email_id AS k, l.id, l.name, l.color FROM email_labels el JOIN labels l ON l.id = el.label_id
+					 WHERE el.email_id IN (${chunk.map(() => "?").join(", ")}) ORDER BY l.name COLLATE NOCASE`,
+					...chunk,
+				),
+			] as any[];
+			for (const r of found) push(byEmail, r.k, { id: r.id, name: r.name, color: r.color });
+		}
+		for (let i = 0; i < threadIds.length; i += 100) {
+			const chunk = threadIds.slice(i, i + 100);
+			const found = [
+				...sql.exec(
+					`SELECT DISTINCT e.thread_id AS k, l.id, l.name, l.color FROM email_labels el
+					 JOIN emails e ON e.id = el.email_id JOIN labels l ON l.id = el.label_id
+					 WHERE e.thread_id IN (${chunk.map(() => "?").join(", ")}) ORDER BY l.name COLLATE NOCASE`,
+					...chunk,
+				),
+			] as any[];
+			for (const r of found) push(byThread, r.k, { id: r.id, name: r.name, color: r.color });
+		}
+		return attachLabels(rows, byEmail, byThread);
+	}
+
+	/** Messages carrying a label, newest first (Trash excluded). */
+	async getEmailsByLabel(labelId: string, page = 1, limit = 25) {
+		const sql = this.ctx.storage.sql;
+		const size = Math.min(Math.max(limit, 1), 100);
+		const offset = (Math.max(page, 1) - 1) * size;
+		const emails = [
+			...sql.exec(
+				`SELECT e.id, e.subject, e.sender, e.recipient, e.cc, e.bcc, e.date, e.read, e.starred,
+				        e.in_reply_to, e.email_references, e.thread_id, e.folder_id, SUBSTR(e.body, 1, 300) AS snippet
+				 FROM emails e JOIN email_labels el ON el.email_id = e.id
+				 WHERE el.label_id = ? AND e.folder_id != 'trash'
+				 ORDER BY e.date DESC LIMIT ? OFFSET ?`,
+				labelId,
+				size,
+				offset,
+			),
+		] as any[];
+		const totalCount = Number(
+			([...sql.exec(`SELECT COUNT(*) AS n FROM email_labels el JOIN emails e ON e.id = el.email_id WHERE el.label_id = ? AND e.folder_id != 'trash'`, labelId)][0] as { n: number }).n,
+		);
+		return { emails, totalCount };
+	}
+
 	// ── Bulk actions ───────────────────────────────────────────────
 
 	async bulkUpdate(req: BulkRequest): Promise<
 		{ count: number; attachments: { email_id: string; id: string; filename: string }[] } | { error: string }
 	> {
+		this.#notify("emails");
 		const { where, params } = buildBulkWhere(req);
 		const sql = this.ctx.storage.sql;
 		// rowsWritten also counts index writes, so count the matched rows instead.
@@ -1048,6 +1255,18 @@ export class MailboxDO extends DurableObject<Env> {
 				if (!folder) return { error: "Folder not found" };
 				const count = matched();
 				sql.exec(`UPDATE emails SET folder_id = ? WHERE ${where}`, folder.id, ...params);
+				return { count, attachments: [] };
+			}
+			case "label":
+			case "unlabel": {
+				const label = [...sql.exec(`SELECT id FROM labels WHERE id = ?`, req.labelId!)][0] as { id: string } | undefined;
+				if (!label) return { error: "Label not found" };
+				const count = matched();
+				if (req.action === "label") {
+					sql.exec(`INSERT OR IGNORE INTO email_labels (email_id, label_id) SELECT id, ? FROM emails WHERE ${where}`, label.id, ...params);
+				} else {
+					sql.exec(`DELETE FROM email_labels WHERE label_id = ? AND email_id IN (SELECT id FROM emails WHERE ${where})`, label.id, ...params);
+				}
 				return { count, attachments: [] };
 			}
 			case "delete": {
@@ -1114,6 +1333,7 @@ export class MailboxDO extends DurableObject<Env> {
 		email: EmailData,
 		attachments: AttachmentData[],
 	) {
+		this.#notify("emails");
 		// Resolve folder name or ID to the actual folder ID.
 		const folderRow = this.db
 			.select({ id: schema.folders.id })

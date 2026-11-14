@@ -84,6 +84,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
 			<head>
 				<meta charSet="UTF-8" />
 				{/* Set the theme before first paint so dark mode does not flash light. */}
+				{/* biome-ignore lint/security/noDangerouslySetInnerHtml: static first-paint theme script from our own constant */}
 				<script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
 				<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 				<link

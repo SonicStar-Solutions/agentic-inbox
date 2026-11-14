@@ -2,11 +2,15 @@
 // Licensed under the Apache 2.0 license found in the LICENSE file or at:
 //     https://opensource.org/licenses/Apache-2.0
 
+import { Button } from "@cloudflare/kumo";
+import { XIcon } from "@phosphor-icons/react";
 import { useEffect, useRef } from "react";
 import { Outlet, useParams } from "react-router";
 import AgentSidebar from "~/components/AgentSidebar";
-import ComposeEmail from "~/components/ComposeEmail";
+import ShortcutsDialog from "~/components/ShortcutsDialog";
 import UndoSendBar from "~/components/UndoSendBar";
+import { useGlobalShortcuts } from "~/hooks/useGlobalShortcuts";
+import { useLiveUpdates } from "~/hooks/useLiveUpdates";
 import Header from "~/components/Header";
 import Sidebar from "~/components/Sidebar";
 import { useMailbox } from "~/queries/mailboxes";
@@ -21,9 +25,13 @@ export default function MailboxRoute() {
 		isSidebarOpen,
 		closeSidebar,
 		isAgentPanelOpen,
+		isAgentSheetOpen,
+		toggleAgentSheet,
 		closePanel,
-		closeComposeModal,
 	} = useUIStore();
+
+	useGlobalShortcuts();
+	useLiveUpdates(mailboxId);
 
 	useEffect(() => {
 		if (
@@ -32,12 +40,11 @@ export default function MailboxRoute() {
 			prevMailboxIdRef.current !== mailboxId
 		) {
 			closePanel();
-			closeComposeModal();
 			closeSidebar();
 		}
 
 		prevMailboxIdRef.current = mailboxId;
-	}, [mailboxId, closeComposeModal, closePanel, closeSidebar]);
+	}, [mailboxId, closePanel, closeSidebar]);
 
 	return (
 		<div className="flex h-screen overflow-hidden">
@@ -77,8 +84,20 @@ export default function MailboxRoute() {
 				</div>
 			)}
 
-			<ComposeEmail />
+			{/* Agent as a full-screen sheet below the lg breakpoint, where the side panel is hidden */}
+			{isAgentSheetOpen && (
+				<div className="fixed inset-0 z-50 flex flex-col bg-kumo-base lg:hidden">
+					<div className="flex items-center justify-between border-b border-kumo-line px-3 py-2">
+						<span className="text-sm font-semibold text-kumo-default">Agent</span>
+						<Button variant="ghost" shape="square" size="sm" icon={<XIcon size={18} />} onClick={toggleAgentSheet} aria-label="Close agent" />
+					</div>
+					<div className="min-h-0 flex-1">
+						<AgentSidebar />
+					</div>
+				</div>
+			)}
 			<UndoSendBar />
+			<ShortcutsDialog />
 		</div>
 	);
 }

@@ -17,6 +17,8 @@ interface BulkToolbarProps {
 	canArchive: boolean;
 	inTrash: boolean;
 	busy: boolean;
+	/** Labels that can be applied or removed. */
+	labels?: { id: string; name: string }[];
 }
 
 /** Replaces the folder header while conversations are selected (#88). */
@@ -30,6 +32,7 @@ export default function BulkToolbar({
 	canArchive,
 	inTrash,
 	busy,
+	labels = [],
 }: BulkToolbarProps) {
 	return (
 		<div
@@ -79,6 +82,39 @@ export default function BulkToolbar({
 						</option>
 					))}
 				</select>
+			)}
+
+			{labels.length > 0 && (
+				<>
+					<select
+						aria-label="Apply label"
+						value=""
+						disabled={busy}
+						onChange={(e) => e.target.value && onAction("label", e.target.value)}
+						className="ml-1 h-7 rounded-md border border-kumo-line bg-kumo-base px-2 text-xs text-kumo-default"
+					>
+						<option value="">Label…</option>
+						{labels.map((l) => (
+							<option key={l.id} value={l.id}>
+								{l.name}
+							</option>
+						))}
+					</select>
+					<select
+						aria-label="Remove label"
+						value=""
+						disabled={busy}
+						onChange={(e) => e.target.value && onAction("unlabel", e.target.value)}
+						className="h-7 rounded-md border border-kumo-line bg-kumo-base px-2 text-xs text-kumo-default"
+					>
+						<option value="">Remove label…</option>
+						{labels.map((l) => (
+							<option key={l.id} value={l.id}>
+								{l.name}
+							</option>
+						))}
+					</select>
+				</>
 			)}
 
 			<Tooltip content="Clear selection" asChild>

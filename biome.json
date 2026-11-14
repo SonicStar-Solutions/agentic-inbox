@@ -1,0 +1,46 @@
+{
+	"$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+	"vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
+	"files": { "ignore": ["build", ".react-router", "worker-configuration.d.ts", "*.tsbuildinfo"] },
+	"formatter": { "enabled": false },
+	"organizeImports": { "enabled": false },
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"recommended": true,
+			"correctness": {
+				"noUnusedImports": "warn",
+				"noUnusedVariables": "warn",
+				"useExhaustiveDependencies": "warn",
+				"noInvalidPositionAtImportRule": "off"
+			},
+			"suspicious": {
+				"noExplicitAny": "off",
+				"noAssignInExpressions": "off",
+				"noArrayIndexKey": "warn",
+				"noControlCharactersInRegex": "off",
+				"noGlobalIsNan": "warn"
+			},
+			"style": {
+				"noNonNullAssertion": "off",
+				"useTemplate": "off",
+				"noUnusedTemplateLiteral": "off",
+				"useSingleVarDeclarator": "off",
+				"noParameterAssign": "off",
+				"noInferrableTypes": "off",
+				"useNumberNamespace": "off",
+				"useExponentiationOperator": "off"
+			},
+			"complexity": {
+				"noForEach": "off"
+			},
+			"a11y": {
+				"useKeyWithClickEvents": "warn",
+				"useSemanticElements": "warn",
+				"noLabelWithoutControl": "warn",
+				"useFocusableInteractive": "warn",
+				"noNoninteractiveElementToInteractiveRole": "warn"
+			}
+		}
+	}
+}

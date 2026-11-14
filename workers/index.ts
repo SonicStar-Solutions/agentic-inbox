@@ -19,6 +19,7 @@ import {
 import { SendEmailRequestSchema } from "./lib/schemas";
 import { parseJsonBody } from "./lib/http";
 import { BulkRequestSchema } from "./lib/bulk";
+import { LabelInputSchema, LabelUpdateSchema } from "./lib/labels";
 import { ScheduleRequestSchema, validateSendAt } from "./lib/scheduled";
 import { aliasesOf, resolveAlias, syncAliasIndex, validateAliases } from "./lib/aliases";
 import { isAllowedDomain, parseDomains } from "./lib/domains";
@@ -124,7 +125,7 @@ app.post("/api/v1/mailboxes", async (c) => {
 	const key = `mailboxes/${email}.json`;
 	if (await c.env.BUCKET.head(key)) return c.json({ error: "Mailbox already exists" }, 409);
 	if (await resolveAlias(c.env.BUCKET, email)) return c.json({ error: "That address is already an alias of another mailbox" }, 409);
-	const defaultSettings = { fromName: name, forwarding: { enabled: false, email: "" }, signature: { enabled: false, text: "" }, autoReply: { enabled: false, subject: "", message: "" } };
+	const defaultSettings = { fromName: name, signature: { enabled: false, text: "" } };
 	const finalSettings = { ...defaultSettings, ...settings };
 	await c.env.BUCKET.put(key, JSON.stringify(finalSettings));
 	const stub = c.env.MAILBOX.get(c.env.MAILBOX.idFromName(email));
@@ -186,16 +187,21 @@ app.get("/api/v1/mailboxes/:mailboxId/emails", async (c: AppContext) => {
 	const sortColumn = c.req.query("sortColumn") as any;
 	const sortDirection = c.req.query("sortDirection") as "ASC" | "DESC" | undefined;
 	const stub = c.var.mailboxStub;
+	const label = c.req.query("label");
 
+	if (label) {
+		const found = await (stub as any).getEmailsByLabel(label, page, limit);
+		return c.json({ emails: await (stub as any).withLabels(found.emails), totalCount: found.totalCount });
+	}
 	if (threaded && folder) {
 		const emails = await (stub as any).getThreadedEmails({ folder, page, limit });
 		const totalCount = await (stub as any).countThreadedEmails(folder);
-		return c.json({ emails, totalCount });
+		return c.json({ emails: await (stub as any).withLabels(emails), totalCount });
 	}
 	const emails = await stub.getEmails({ folder, thread_id, page, limit, sortColumn, sortDirection });
 	if (folder) {
 		const totalCount = await stub.countEmails({ folder, thread_id });
-		return c.json({ emails, totalCount });
+		return c.json({ emails: await (stub as any).withLabels(emails), totalCount });
 	}
 	return c.json(emails);
 });
@@ -376,8 +382,14 @@ app.post("/api/v1/mailboxes/:mailboxId/folders", async (c: AppContext) => {
 
 app.put("/api/v1/mailboxes/:mailboxId/folders/:id", async (c: AppContext) => {
 	const { name } = (await c.req.json()) as { name: string };
-	const f = await c.var.mailboxStub.updateFolder(c.req.param("id")!, name);
-	return f ? c.json(f) : c.json({ error: "Folder not found" }, 404);
+	const trimmed = (name ?? "").trim();
+	if (!trimmed) return c.json({ error: "Folder name is required" }, 400);
+	const folders = (await c.var.mailboxStub.getFolders()) as { id: string; name: string }[];
+	if (folders.some((fo) => fo.id !== c.req.param("id") && fo.name.toLowerCase() === trimmed.toLowerCase())) {
+		return c.json({ error: "A folder with this name already exists" }, 409);
+	}
+	const f = await c.var.mailboxStub.updateFolder(c.req.param("id")!, trimmed);
+	return f ? c.json(f) : c.json({ error: "Folder not found or cannot be renamed" }, 404);
 });
 
 app.delete("/api/v1/mailboxes/:mailboxId/folders/:id", async (c: AppContext) => {
@@ -393,6 +405,7 @@ app.get("/api/v1/mailboxes/:mailboxId/search", async (c: AppContext) => {
 		to: c.req.query("to"), subject: c.req.query("subject"), date_start: c.req.query("date_start"),
 		date_end: c.req.query("date_end"), is_read: boolQuery(c, "is_read"),
 		is_starred: boolQuery(c, "is_starred"), has_attachment: boolQuery(c, "has_attachment"),
+		group_by_thread: c.req.query("group") === "thread",
 	};
 	const overlong = findOverlongSearchTerm({
 		query: searchOpts.query as string, from: searchOpts.from as string | undefined,
@@ -402,7 +415,44 @@ app.get("/api/v1/mailboxes/:mailboxId/search", async (c: AppContext) => {
 	const stub = c.var.mailboxStub as any;
 	const emails = await stub.searchEmails({ ...searchOpts, page: intQuery(c, "page"), limit: intQuery(c, "limit") });
 	const totalCount = await stub.countSearchResults(searchOpts);
-	return c.json({ emails, totalCount });
+	return c.json({ emails: await stub.withLabels(emails), totalCount });
+});
+
+// -- Labels -------------------------------------------------------------
+
+app.get("/api/v1/mailboxes/:mailboxId/labels", async (c: AppContext) => {
+	return c.json({ labels: await (c.var.mailboxStub as any).listLabels() });
+});
+
+app.post("/api/v1/mailboxes/:mailboxId/labels", async (c: AppContext) => {
+	const parsed = await parseJsonBody(c, LabelInputSchema);
+	if (!parsed.ok) return parsed.response;
+	const result = await (c.var.mailboxStub as any).createLabel(parsed.data.name, parsed.data.color);
+	if ("error" in result) return c.json({ error: result.error }, 409);
+	return c.json(result, 201);
+});
+
+app.put("/api/v1/mailboxes/:mailboxId/labels/:id", async (c: AppContext) => {
+	const parsed = await parseJsonBody(c, LabelUpdateSchema);
+	if (!parsed.ok) return parsed.response;
+	const result = await (c.var.mailboxStub as any).updateLabel(c.req.param("id")!, parsed.data);
+	if (result === null) return c.json({ error: "Label not found" }, 404);
+	if ("error" in result) return c.json({ error: result.error }, 409);
+	return c.json(result);
+});
+
+app.delete("/api/v1/mailboxes/:mailboxId/labels/:id", async (c: AppContext) => {
+	const ok = await (c.var.mailboxStub as any).deleteLabel(c.req.param("id")!);
+	return ok ? c.body(null, 204) : c.json({ error: "Label not found" }, 404);
+});
+
+// -- Live updates (WebSocket) -----------------------------------------
+
+app.get("/api/v1/mailboxes/:mailboxId/events", async (c: AppContext) => {
+	if (c.req.header("Upgrade")?.toLowerCase() !== "websocket") {
+		return c.text("Expected a WebSocket upgrade", 426);
+	}
+	return c.var.mailboxStub.fetch(c.req.raw);
 });
 
 // -- Contacts (recipient suggestions) ---------------------------------

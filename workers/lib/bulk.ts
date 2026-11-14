@@ -5,7 +5,7 @@
 import { z } from "zod";
 
 /** Bulk actions on selected conversations (#88). */
-export const BULK_ACTIONS = ["read", "unread", "star", "unstar", "move", "delete"] as const;
+export const BULK_ACTIONS = ["read", "unread", "star", "unstar", "move", "delete", "label", "unlabel"] as const;
 
 export const BulkRequestSchema = z
 	.object({
@@ -18,10 +18,13 @@ export const BulkRequestSchema = z
 		folder: z.string().min(1).optional(),
 		/** Destination for action "move". */
 		folderId: z.string().min(1).optional(),
+		/** The label for actions "label" and "unlabel". */
+		labelId: z.string().min(1).optional(),
 	})
 	.refine((v) => v.ids.length + v.thread_ids.length > 0, { message: "Select at least one conversation" })
 	.refine((v) => v.thread_ids.length === 0 || !!v.folder, { message: "folder is required with thread_ids" })
-	.refine((v) => v.action !== "move" || !!v.folderId, { message: "folderId is required for move" });
+	.refine((v) => v.action !== "move" || !!v.folderId, { message: "folderId is required for move" })
+	.refine((v) => (v.action !== "label" && v.action !== "unlabel") || !!v.labelId, { message: "labelId is required to label or unlabel" });
 
 export type BulkRequest = z.infer<typeof BulkRequestSchema>;
 

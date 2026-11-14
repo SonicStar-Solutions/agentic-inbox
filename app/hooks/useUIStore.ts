@@ -37,10 +37,13 @@ interface UIState {
 	isAgentPanelOpen: boolean;
 	toggleAgentPanel: () => void;
 
-	// Legacy dialog support (kept for non-split views)
-	isComposeModalOpen: boolean;
-	openComposeModal: (options?: ComposeOptions) => void;
-	closeComposeModal: () => void;
+	// Agent as a full-screen sheet on small screens
+	isAgentSheetOpen: boolean;
+	toggleAgentSheet: () => void;
+
+	// Keyboard shortcut help
+	isShortcutsOpen: boolean;
+	toggleShortcuts: () => void;
 }
 
 export const useUIStore = create<UIState>((set, get) => ({
@@ -48,9 +51,10 @@ export const useUIStore = create<UIState>((set, get) => ({
 	isComposing: false,
 	_previousEmailId: null,
 	composeOptions: { mode: "new", originalEmail: null },
-	isComposeModalOpen: false,
 	isSidebarOpen: false,
 	isAgentPanelOpen: true,
+	isShortcutsOpen: false,
+	isAgentSheetOpen: false,
 
 	selectEmail: (id) => set({ selectedEmailId: id, isComposing: false }),
 
@@ -84,15 +88,7 @@ export const useUIStore = create<UIState>((set, get) => ({
 
 	toggleAgentPanel: () => set({ isAgentPanelOpen: !get().isAgentPanelOpen }),
 
-	openComposeModal: (options) =>
-		set({
-			composeOptions: options || { mode: "new", originalEmail: null },
-			isComposeModalOpen: true,
-		}),
+	toggleAgentSheet: () => set({ isAgentSheetOpen: !get().isAgentSheetOpen }),
 
-	closeComposeModal: () =>
-		set({
-			isComposeModalOpen: false,
-			composeOptions: { mode: "new", originalEmail: null },
-		}),
+	toggleShortcuts: () => set({ isShortcutsOpen: !get().isShortcutsOpen }),
 }));
