@@ -18,6 +18,7 @@ import {
 } from "./lib/email-helpers";
 import { SendEmailRequestSchema } from "./lib/schemas";
 import { parseJsonBody } from "./lib/http";
+import { isAllowedDomain, parseDomains } from "./lib/domains";
 import { logRateLimitHit } from "./lib/rate-limit";
 import { findOverlongSearchTerm, MAX_SEARCH_TERM_LENGTH } from "./lib/search";
 import { handleReplyEmail, handleForwardEmail } from "./routes/reply-forward";
@@ -90,8 +91,7 @@ app.use("/api/v1/mailboxes/:mailboxId/*", requireMailbox);
 // -- Config ---------------------------------------------------------
 
 app.get("/api/v1/config", (c) => {
-	const domainsRaw = c.env.DOMAINS || "";
-	const domains = domainsRaw.split(",").map((d) => d.trim()).filter(Boolean);
+	const domains = parseDomains(c.env.DOMAINS);
 	const emailAddresses = c.env.EMAIL_ADDRESSES ?? [];
 	return c.json({ domains, emailAddresses });
 });
@@ -108,6 +108,10 @@ app.post("/api/v1/mailboxes", async (c) => {
 	if (!parsed.ok) return parsed.response;
 	const { name, settings, email: rawEmail } = parsed.data;
 	const email = rawEmail.toLowerCase();
+	const domains = parseDomains(c.env.DOMAINS);
+	if (!isAllowedDomain(email, domains)) {
+		return c.json({ error: `Mailbox domain must be one of: ${domains.join(", ")}` }, 400);
+	}
 	const allowedAddresses = (c.env.EMAIL_ADDRESSES ?? []) as string[];
 	if (allowedAddresses.length > 0 && !allowedAddresses.map((a) => a.toLowerCase()).includes(email)) {
 		return c.json({ error: "Mailbox creation is restricted to configured EMAIL_ADDRESSES" }, 403);
