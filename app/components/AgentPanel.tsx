@@ -23,6 +23,10 @@ import { useParams } from "react-router";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useUIStore } from "~/hooks/useUIStore";
+import { findDraftReplyOutput, type AgentDraftRef } from "~/lib/agent-draft";
+import { escapeHtml } from "~/lib/utils";
+import api from "~/services/api";
+import type { Email } from "~/types";
 import type { UIMessage } from "ai";
 
 const TOOL_LABELS: Record<string, { label: string; icon: React.ReactNode }> = {
@@ -101,6 +105,37 @@ function getToolNameFromPart(part: UIMessage["parts"][number]): string | null {
 	if (part.type === "dynamic-tool") return (part as any).toolName ?? null;
 	if (part.type.startsWith("tool-")) return part.type.replace("tool-", "");
 	return null;
+}
+
+/**
+ * Open the draft the agent saved in the composer as a reply to the original
+ * message. The saved draft (with its quoted original, thread_id and
+ * in_reply_to) is loaded from the server so the composer sends a threaded
+ * reply and removes the draft afterwards; if that fetch fails, an equivalent
+ * draft is rebuilt from the tool output.
+ */
+async function openAgentDraftInComposer(
+	mailboxId: string,
+	ref: AgentDraftRef,
+	startCompose: ReturnType<typeof useUIStore.getState>["startCompose"],
+) {
+	let draftEmail: Email;
+	try {
+		draftEmail = await api.getEmail(mailboxId, ref.draftId);
+	} catch {
+		draftEmail = {
+			id: ref.draftId,
+			subject: ref.subject || "",
+			sender: mailboxId,
+			recipient: ref.to || "",
+			date: new Date().toISOString(),
+			read: true,
+			starred: false,
+			body: escapeHtml(ref.body || "").replace(/\n/g, "<br>"),
+			in_reply_to: ref.originalEmailId ?? null,
+		};
+	}
+	startCompose({ mode: "reply", originalEmail: null, draftEmail });
 }
 
 function hasDraftReplyTool(message: UIMessage): boolean {
@@ -412,38 +447,11 @@ function AgentChatConnected({
 								isStreaming={isStreaming}
 							onAction={(action) => {
 								if (action === "edit") {
-										// Extract draft data from the draft_reply tool result
-										let draftData: {
-											to?: string;
-											subject?: string;
-											body?: string;
-											id?: string;
-										} | null = null;
-										for (const part of msg.parts) {
-											if (
-												(part as any).toolName === "draft_reply" &&
-												(part as any).result
-											) {
-												draftData = (part as any).result;
-												break;
-											}
-										}
-										if (draftData) {
-											const draftEmail = {
-												id: draftData.id || "",
-												subject: draftData.subject || "",
-												sender: mailboxId,
-												recipient: draftData.to || "",
-												date: new Date().toISOString(),
-												read: true,
-												starred: false,
-												body: draftData.body || "",
-											};
-											startCompose({
-												mode: "reply",
-												originalEmail: null,
-												draftEmail,
-											});
+										// AI SDK v6 tool parts are { type: "tool-draft_reply", output },
+										// and the output carries draftId, not id (#87).
+										const ref = findDraftReplyOutput(msg.parts as any[]);
+										if (ref) {
+											void openAgentDraftInComposer(mailboxId, ref, startCompose);
 										} else {
 											sendMessage({
 												text: "Let me edit this draft first. Show me what you have so I can modify it.",
