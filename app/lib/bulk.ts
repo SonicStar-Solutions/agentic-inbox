@@ -4,7 +4,7 @@
 
 import type { Email } from "~/types";
 
-export type BulkAction = "read" | "unread" | "star" | "unstar" | "move" | "delete";
+export type BulkAction = "read" | "unread" | "star" | "unstar" | "move" | "delete" | "label" | "unlabel";
 
 export interface BulkRequestBody {
 	action: BulkAction;
@@ -12,6 +12,7 @@ export interface BulkRequestBody {
 	thread_ids: string[];
 	folder?: string;
 	folderId?: string;
+	labelId?: string;
 }
 
 /**
@@ -24,6 +25,7 @@ export function buildBulkRequest(
 	rows: Pick<Email, "id" | "thread_id" | "thread_count">[],
 	folder: string,
 	folderId?: string,
+	labelId?: string,
 ): BulkRequestBody {
 	const ids: string[] = [];
 	const threadIds: string[] = [];
@@ -34,5 +36,5 @@ export function buildBulkRequest(
 			ids.push(row.id);
 		}
 	}
-	return { action, ids, thread_ids: threadIds, ...(threadIds.length ? { folder } : {}), ...(folderId ? { folderId } : {}) };
+	return { action, ids, thread_ids: threadIds, ...(threadIds.length ? { folder } : {}), ...(folderId ? { folderId } : {}), ...(labelId ? { labelId } : {}) };
 }

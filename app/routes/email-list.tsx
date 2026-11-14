@@ -22,6 +22,8 @@ import { useParams } from "react-router";
 import { Folders } from "shared/folders";
 import { formatListDate } from "shared/dates";
 import BulkToolbar from "~/components/BulkToolbar";
+import LabelChip from "~/components/LabelChip";
+import { useLabels } from "~/queries/labels";
 import MailboxSplitView from "~/components/MailboxSplitView";
 import { buildBulkRequest, type BulkAction } from "~/lib/bulk";
 import { moveSelection, shouldHandleKey } from "~/lib/shortcuts";
@@ -145,9 +147,10 @@ function FolderEmptyState({
 }
 
 export default function EmailListRoute() {
-	const { mailboxId, folder } = useParams<{
+	const { mailboxId, folder, labelId } = useParams<{
 		mailboxId: string;
 		folder: string;
+		labelId: string;
 	}>();
 	const {
 		selectedEmailId,
@@ -167,14 +170,13 @@ export default function EmailListRoute() {
 	// Selected list rows by email id (#88)
 	const [selected, setSelected] = useState<Map<string, Email>>(new Map());
 
-	const params = useMemo(
-		() => ({
-			folder: folder || "",
-			page: String(page),
-			limit: String(PAGE_SIZE),
-		}),
-		[folder, page],
-	);
+	// The same list serves folders and, at /label/:labelId, a label's messages (#89).
+	const params = useMemo(() => {
+		const p: Record<string, string> = { page: String(page), limit: String(PAGE_SIZE) };
+		if (labelId) p.label = labelId;
+		else p.folder = folder || "";
+		return p;
+	}, [folder, labelId, page]);
 
 	const {
 		data: emailData,
@@ -188,12 +190,14 @@ export default function EmailListRoute() {
 	const totalCount = emailData?.totalCount ?? 0;
 
 	const { data: folders = [] } = useFolders(mailboxId);
+	const { data: labels = [] } = useLabels(mailboxId);
 
 	const folderName = useMemo(() => {
+		if (labelId) return labels.find((l) => l.id === labelId)?.name ?? "Label";
 		const found = folders.find((f) => f.id === folder);
 		if (found) return found.name;
 		return folder ? folder.charAt(0).toUpperCase() + folder.slice(1) : "Inbox";
-	}, [folders, folder]);
+	}, [folders, labels, folder, labelId]);
 
 	const isPanelOpen = selectedEmailId !== null || isComposing;
 
@@ -207,7 +211,7 @@ export default function EmailListRoute() {
 			return next.size === prev.size ? prev : next;
 		});
 	}, [emails]);
-	useEffect(() => setSelected(new Map()), [mailboxId, folder, page]);
+	useEffect(() => setSelected(new Map()), [mailboxId, folder, labelId, page]);
 
 	const toggleSelected = (email: Email) =>
 		setSelected((prev) => {
@@ -224,7 +228,9 @@ export default function EmailListRoute() {
 		const rows = rowsOverride ?? [...selected.values()];
 		if (!mailboxId || rows.length === 0) return;
 		let effective: BulkAction = action;
-		let destination = folderId;
+		const isLabelAction = action === "label" || action === "unlabel";
+		// For label actions the second argument is the label id
+		let destination = isLabelAction ? undefined : folderId;
 		if (action === "delete") {
 			if (inTrash) {
 				if (!window.confirm(`Permanently delete ${rows.length} conversation${rows.length === 1 ? "" : "s"}? This cannot be undone.`)) return;
@@ -234,7 +240,7 @@ export default function EmailListRoute() {
 			}
 		}
 		bulk.mutate(
-			{ mailboxId, request: buildBulkRequest(effective, rows, folder || Folders.INBOX, destination) },
+			{ mailboxId, request: buildBulkRequest(effective, rows, folder || Folders.INBOX, destination, isLabelAction ? folderId : undefined) },
 			{
 				onSuccess: () => {
 					if (selectedEmailId && rows.some((r) => r.id === selectedEmailId) && (effective === "move" || effective === "delete")) closePanel();
@@ -401,6 +407,7 @@ export default function EmailListRoute() {
 						canArchive={folder !== Folders.ARCHIVE}
 						inTrash={inTrash}
 						busy={bulk.isPending}
+						labels={labels.map((l) => ({ id: l.id, name: l.name }))}
 					/>
 				) : (
 
@@ -532,6 +539,9 @@ export default function EmailListRoute() {
 														</span>
 													</Tooltip>
 												)}
+												{email.labels?.slice(0, 3).map((l) => (
+													<LabelChip key={l.id} label={l} />
+												))}
 												<span className="text-sm text-kumo-subtle shrink-0 ml-auto">
 													{formatListDate(email.date)}
 												</span>

@@ -15,7 +15,7 @@ describe("live updates (#89)", () => {
 		expect(parseChange(42)).toBeNull();
 	});
 	it("maps a scope to the query keys to refetch", () => {
-		expect(keysForScope("folders", "m")).toEqual([["folders", "m"]]);
+		expect(keysForScope("folders", "m")).toEqual([["folders", "m"], ["labels", "m"]]);
 		expect(keysForScope("emails", "m")).toContainEqual(["emails", "m"]);
 		expect(keysForScope("emails", "m")).toContainEqual(["folders", "m"]);
 		expect(keysForScope("all", "m")).toContainEqual(["scheduled", "m"]);

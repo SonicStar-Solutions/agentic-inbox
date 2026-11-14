@@ -122,6 +122,13 @@ const api = {
 		return res?.scheduled ?? [];
 	},
 	cancelScheduled: (mailboxId: string, id: string) => del<void>(`/api/v1/mailboxes/${mailboxId}/scheduled/${id}`),
+	listLabels: async (mailboxId: string) => {
+		const res = await get<{ labels: import("~/types").Label[] }>(`/api/v1/mailboxes/${mailboxId}/labels`);
+		return res?.labels ?? [];
+	},
+	createLabel: (mailboxId: string, name: string, color: string) =>
+		post<import("~/types").Label>(`/api/v1/mailboxes/${mailboxId}/labels`, { name, color }),
+	deleteLabel: (mailboxId: string, id: string) => del<void>(`/api/v1/mailboxes/${mailboxId}/labels/${id}`),
 	bulkEmails: (mailboxId: string, body: unknown) =>
 		post<{ count: number }>(`/api/v1/mailboxes/${mailboxId}/emails/bulk`, body),
 	getContacts: async (mailboxId: string, q: string, limit = 8) => {

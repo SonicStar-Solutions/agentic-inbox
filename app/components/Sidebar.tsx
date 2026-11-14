@@ -21,6 +21,7 @@ import { ClockIcon } from "@phosphor-icons/react";
 import { Folders, SYSTEM_FOLDER_IDS } from "shared/folders";
 import { useCreateFolder, useDeleteFolder, useFolders, useUpdateFolder } from "~/queries/folders";
 import { useMailbox } from "~/queries/mailboxes";
+import LabelsSection from "~/components/LabelsSection";
 import { useScheduled } from "~/queries/scheduled";
 import { useUIStore } from "~/hooks/useUIStore";
 
@@ -289,6 +290,8 @@ export default function Sidebar() {
 						</div>
 					</div>
 				)}
+
+				<LabelsSection mailboxId={mailboxId} onNavigate={handleNavClick} />
 			</nav>
 
 			{/* Rename folder dialog */}

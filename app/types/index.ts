@@ -27,6 +27,14 @@ export interface Mailbox {
 	settings?: MailboxSettings;
 }
 
+export interface Label {
+	id: string;
+	name: string;
+	color: string;
+	/** Messages carrying the label (not in Trash); only on the label list. */
+	count?: number;
+}
+
 export interface Email {
 	id: string;
 	thread_id?: string | null;
@@ -46,6 +54,7 @@ export interface Email {
 	raw_headers?: string | null;
 	attachments?: Attachment[];
 	snippet?: string | null;
+	labels?: Label[];
 	// Thread aggregate fields (only present in threaded list view)
 	thread_count?: number;
 	thread_unread_count?: number;

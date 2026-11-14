@@ -20,12 +20,12 @@ export function parseChange(data: unknown): ChangeScope | null {
 
 /** Query keys to refetch for a change (all keys are prefixes). */
 export function keysForScope(scope: ChangeScope, mailboxId: string): (string | undefined)[][] {
-	const emails = [["emails", mailboxId], ["folders", mailboxId], ["search"]];
+	const emails = [["emails", mailboxId], ["folders", mailboxId], ["labels", mailboxId], ["search"]];
 	switch (scope) {
 		case "emails":
 			return emails; // unread counts live with the folders
 		case "folders":
-			return [["folders", mailboxId]];
+			return [["folders", mailboxId], ["labels", mailboxId]];
 		case "scheduled":
 			return [["scheduled", mailboxId]];
 		default:
