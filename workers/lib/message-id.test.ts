@@ -42,6 +42,15 @@ describe("sent messages store the provider's Message-ID (#83)", () => {
 		expect(headers.find((h) => h.key === "message-id")?.value).toBe("<assigned-by-provider@example.com>");
 	});
 
+	it("treats a binding that resolves with no result as a successful send", async () => {
+		const { env, stubs } = makeFakeEnv({ sendImpl: async () => undefined as any });
+		const { ctx } = fakeExecutionCtx();
+		const res = await app.request("/api/v1/mailboxes/alice@example.com/emails", jsonPost(compose), env, ctx);
+		expect(res.status).toBe(202);
+		expect(stubs["alice@example.com"].rows).toHaveLength(1);
+		expect(stubs["alice@example.com"].rows[0].email.message_id).toMatch(/@example.com$/);
+	});
+
 	it("falls back to the generated id when the provider returns none", async () => {
 		const { env, stubs } = makeFakeEnv({ sendImpl: async () => ({ messageId: "" }) });
 		const { ctx } = fakeExecutionCtx();
