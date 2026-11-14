@@ -15,6 +15,7 @@ import {
 	resolveOriginalEmail,
 } from "../lib/email-helpers";
 import { SendEmailRequestSchema } from "../lib/schemas";
+import { parseJsonBody } from "../lib/http";
 import { Folders } from "../../shared/folders";
 import type { MailboxContext } from "../lib/mailbox";
 
@@ -24,8 +25,9 @@ type RateLimitStub = { checkSendRateLimit: () => Promise<string | null> };
 export async function handleReplyEmail(c: AppContext) {
 	const mailboxId = c.req.param("mailboxId") ?? "";
 	const id = c.req.param("id") ?? "";
-	const body = SendEmailRequestSchema.parse(await c.req.json());
-	const { to, cc, bcc, from, subject, html, text, attachments } = body;
+	const parsed = await parseJsonBody(c, SendEmailRequestSchema);
+	if (!parsed.ok) return parsed.response;
+	const { to, cc, bcc, from, subject, html, text, attachments } = parsed.data;
 
 	const stub = c.var.mailboxStub;
 	const rawOriginal = (await stub.getEmail(id)) as EmailFull | null;
@@ -115,8 +117,9 @@ export async function handleReplyEmail(c: AppContext) {
 export async function handleForwardEmail(c: AppContext) {
 	const mailboxId = c.req.param("mailboxId") ?? "";
 	const id = c.req.param("id") ?? "";
-	const body = SendEmailRequestSchema.parse(await c.req.json());
-	const { to, cc, bcc, from, subject, html, text, attachments } = body;
+	const parsed = await parseJsonBody(c, SendEmailRequestSchema);
+	if (!parsed.ok) return parsed.response;
+	const { to, cc, bcc, from, subject, html, text, attachments } = parsed.data;
 
 	const stub = c.var.mailboxStub;
 	const rawOriginal = (await stub.getEmail(id)) as EmailFull | null;
