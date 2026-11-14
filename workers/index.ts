@@ -376,7 +376,12 @@ app.get("/api/v1/mailboxes/:mailboxId/emails/:emailId/attachments/:attachmentId"
 	const headers = new Headers();
 	headers.set("Content-Type", attachment.mimetype);
 	const sanitized = attachment.filename.replace(/[\x00-\x1f"\\]/g, "_");
-	headers.set("Content-Disposition", `attachment; filename="${sanitized}"; filename*=UTF-8''${encodeURIComponent(attachment.filename)}`);
+	// PDFs may be previewed in the browser's viewer (?inline=1). Nothing else is
+	// ever served inline: the stored type comes from the sender, and nosniff stops
+	// the browser from treating a mislabelled file as HTML.
+	const inline = c.req.query("inline") === "1" && attachment.mimetype.toLowerCase() === "application/pdf";
+	headers.set("Content-Disposition", `${inline ? "inline" : "attachment"}; filename="${sanitized}"; filename*=UTF-8''${encodeURIComponent(attachment.filename)}`);
+	headers.set("X-Content-Type-Options", "nosniff");
 	return new Response(obj.body, { headers });
 });
 

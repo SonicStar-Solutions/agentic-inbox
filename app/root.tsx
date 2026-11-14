@@ -12,7 +12,7 @@ import {
 } from "@cloudflare/kumo";
 import { WarningIcon } from "@phosphor-icons/react";
 import { MutationCache, QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { forwardRef, useState } from "react";
+import { forwardRef, useEffect, useState } from "react";
 import {
 	isRouteErrorResponse,
 	Links,
@@ -23,6 +23,8 @@ import {
 	ScrollRestoration,
 } from "react-router";
 import MutationErrorToasts from "~/components/MutationErrorToasts";
+import { THEME_INIT_SCRIPT } from "~/lib/theme";
+import { useTheme } from "~/hooks/useTheme";
 import { ApiError } from "~/services/api";
 import "./index.css";
 
@@ -78,9 +80,11 @@ const KumoLink = forwardRef<
 
 export function Layout({ children }: { children: React.ReactNode }) {
 	return (
-		<html lang="en">
+		<html lang="en" suppressHydrationWarning>
 			<head>
 				<meta charSet="UTF-8" />
+				{/* Set the theme before first paint so dark mode does not flash light. */}
+				<script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
 				<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 				<link
 					rel="icon"
@@ -114,6 +118,8 @@ export default function App() {
 	// Use useState to ensure each SSR request gets a fresh client while the
 	// browser reuses the same singleton across navigations.
 	const [queryClient] = useState(getQueryClient);
+	const initTheme = useTheme((s) => s.init);
+	useEffect(() => initTheme(), [initTheme]);
 	return (
 		<QueryClientProvider client={queryClient}>
 			<LinkProvider component={KumoLink}>

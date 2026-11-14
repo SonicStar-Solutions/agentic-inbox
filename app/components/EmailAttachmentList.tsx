@@ -60,7 +60,8 @@ export default function EmailAttachmentList({
 						);
 					}
 
-					return (
+					const isPdf = attachment.mimetype?.toLowerCase() === "application/pdf";
+					const download = (
 						<a
 							key={attachment.id}
 							href={url}
@@ -74,6 +75,23 @@ export default function EmailAttachmentList({
 							</span>
 							<span className="text-kumo-subtle">{formatBytes(attachment.size)}</span>
 						</a>
+					);
+					if (!isPdf) return download;
+
+					// PDFs also get a Preview link that opens the browser's PDF viewer (#89)
+					return (
+						<div key={attachment.id} className="flex items-center gap-1">
+							{download}
+							<a
+								href={`${url}?inline=1`}
+								target="_blank"
+								rel="noopener noreferrer"
+								aria-label={`Preview ${attachment.filename}`}
+								className="rounded-md border border-kumo-line px-2 py-2 text-xs no-underline text-kumo-link transition-colors hover:bg-kumo-tint"
+							>
+								Preview
+							</a>
+						</div>
 					);
 				})}
 			</div>
