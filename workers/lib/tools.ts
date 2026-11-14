@@ -28,6 +28,9 @@ import {
 } from "./email-helpers";
 import { verifyDraft } from "./ai";
 import { sendEmail } from "../email-sender";
+import { normalizeMessageId } from "./send";
+import { resolveModel } from "./models";
+import { logRateLimitHit } from "./rate-limit";
 import { Folders } from "../../shared/folders";
 import type { Env } from "../types";
 
@@ -136,7 +139,7 @@ export async function toolDraftReply(
 	// Verify/sanitize if requested
 	let processedBody = params.body.trim();
 	if (params.runVerifyDraft) {
-		const sanitized = await verifyDraft(env.AI, processedBody);
+		const sanitized = await verifyDraft(env.AI, processedBody, resolveModel(env, "draftVerifier"));
 		if (!sanitized) {
 			return { error: "Draft verification failed — body could not be verified. Please try again." };
 		}
@@ -217,7 +220,7 @@ export async function toolDraftEmail(
 
 	let processedBody = params.body.trim();
 	if (params.runVerifyDraft) {
-		const sanitized = await verifyDraft(env.AI, processedBody);
+		const sanitized = await verifyDraft(env.AI, processedBody, resolveModel(env, "draftVerifier"));
 		if (!sanitized) {
 			return { error: "Draft verification failed — body could not be verified. Please try again." };
 		}
@@ -294,7 +297,7 @@ export async function toolUpdateDraft(
 	// Verify the body BEFORE deleting the old draft to prevent data loss
 	const newDraftId = crypto.randomUUID();
 	const rawBody = params.bodyHtml ?? oldDraft.body ?? "";
-	const verifiedBody = await verifyDraft(env.AI, rawBody);
+	const verifiedBody = await verifyDraft(env.AI, rawBody, resolveModel(env, "draftVerifier"));
 
 	if (!verifiedBody) {
 		return { error: "Draft verification failed — keeping existing draft unchanged. Please try again." };
@@ -408,6 +411,7 @@ export async function toolSendReply(
 	// Check send rate limit
 	const rateLimitError = await (stub as unknown as RateLimitStub).checkSendRateLimit();
 	if (rateLimitError) {
+		logRateLimitHit("mcp:send_reply", mailboxId, rateLimitError);
 		return { error: rateLimitError };
 	}
 
@@ -422,7 +426,7 @@ export async function toolSendReply(
 	const { messageId, outgoingMessageId } = generateMessageId(fromDomain);
 
 	// Verify and append quoted original message
-	const sanitizedBody = await verifyDraft(env.AI, params.bodyHtml);
+	const sanitizedBody = await verifyDraft(env.AI, params.bodyHtml, resolveModel(env, "draftVerifier"));
 	if (!sanitizedBody) {
 		return { error: "Draft verification failed — refusing to send unverified content. Please try again." };
 	}
@@ -433,14 +437,17 @@ export async function toolSendReply(
 	});
 	const fullBodyHtml = sanitizedBody + quotedBlock;
 
+	let sentMessageId = outgoingMessageId;
 	try {
-		await sendEmail(env.EMAIL, {
+		const result = await sendEmail(env.EMAIL, {
 			to: params.to,
 			from: mailboxId,
 			subject: params.subject,
 			html: fullBodyHtml,
 			headers: buildThreadingHeaders(originalMsgId, references),
 		});
+		// Store the Message-ID the provider actually assigned (#83).
+		sentMessageId = normalizeMessageId(result?.messageId) ?? outgoingMessageId;
 	} catch (e) {
 		console.error("Email send failed:", (e as Error).message);
 		return { error: `Failed to send reply: ${(e as Error).message}` };
@@ -459,7 +466,7 @@ export async function toolSendReply(
 			email_references:
 				references.length > 0 ? JSON.stringify(references) : null,
 			thread_id: threadId,
-			message_id: outgoingMessageId,
+			message_id: sentMessageId,
 		},
 		[],
 	);
@@ -486,6 +493,7 @@ export async function toolSendEmail(
 	// Check send rate limit
 	const rateLimitError = await (stub as unknown as RateLimitStub).checkSendRateLimit();
 	if (rateLimitError) {
+		logRateLimitHit("mcp:send_email", mailboxId, rateLimitError);
 		return { error: rateLimitError };
 	}
 
@@ -493,18 +501,21 @@ export async function toolSendEmail(
 	if (!fromDomain) throw new Error("Invalid mailbox email address");
 	const { messageId, outgoingMessageId } = generateMessageId(fromDomain);
 
-	const sanitizedBody = await verifyDraft(env.AI, params.bodyHtml);
+	const sanitizedBody = await verifyDraft(env.AI, params.bodyHtml, resolveModel(env, "draftVerifier"));
 	if (!sanitizedBody) {
 		return { error: "Draft verification failed — refusing to send unverified content. Please try again." };
 	}
 
+	let sentMessageId = outgoingMessageId;
 	try {
-		await sendEmail(env.EMAIL, {
+		const result = await sendEmail(env.EMAIL, {
 			to: params.to,
 			from: mailboxId,
 			subject: params.subject,
 			html: sanitizedBody,
 		});
+		// Store the Message-ID the provider actually assigned (#83).
+		sentMessageId = normalizeMessageId(result?.messageId) ?? outgoingMessageId;
 	} catch (e) {
 		console.error("Email send failed:", (e as Error).message);
 		return { error: `Failed to send email: ${(e as Error).message}` };
@@ -522,7 +533,7 @@ export async function toolSendEmail(
 			in_reply_to: null,
 			email_references: null,
 			thread_id: messageId,
-			message_id: outgoingMessageId,
+			message_id: sentMessageId,
 		},
 		[],
 	);

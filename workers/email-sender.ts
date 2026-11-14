@@ -68,5 +68,8 @@ export async function sendEmail(
 	}
 
 	const result = await binding.send(message as any);
-	return { messageId: result.messageId };
+	// Some bindings (e.g. the local Miniflare simulation) resolve without a
+	// result. The send itself succeeded, so don't treat that as a failure;
+	// callers fall back to their generated Message-ID when this is empty.
+	return { messageId: (result as { messageId?: string } | undefined)?.messageId ?? "" };
 }

@@ -22,6 +22,7 @@ import {
 	Scripts,
 	ScrollRestoration,
 } from "react-router";
+import MutationErrorToasts from "~/components/MutationErrorToasts";
 import { ApiError } from "~/services/api";
 import "./index.css";
 
@@ -42,7 +43,7 @@ function makeQueryClient() {
 		},
 		mutationCache: new MutationCache({
 			onError: (error) => {
-				// Global fallback for mutations that don't handle errors themselves.
+				// Log every failure. User-visible toasts come from <MutationErrorToasts />.
 				// Consumers using mutateAsync + try/catch handle their own errors.
 				console.error("Mutation failed:", error);
 			},
@@ -118,6 +119,7 @@ export default function App() {
 			<LinkProvider component={KumoLink}>
 				<TooltipProvider>
 					<Toasty>
+						<MutationErrorToasts />
 						<Outlet />
 					</Toasty>
 				</TooltipProvider>

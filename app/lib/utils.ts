@@ -71,28 +71,51 @@ export function htmlToPlainText(html: string): string {
 	return (div.textContent || div.innerText || "").trim();
 }
 
-/**
- * Strip all HTML tags from a string.
- */
-export function stripHtml(html: string): string {
-	return html.replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
+function codePointToString(code: number): string {
+	try {
+		return String.fromCodePoint(code);
+	} catch {
+		return ""; // out-of-range numeric entity
+	}
 }
 
-function decodeHtmlEntities(text: string): string {
+/**
+ * Decode the common HTML entities. `&amp;` is decoded last so that an escaped
+ * entity such as `&amp;lt;` becomes the literal text `&lt;`, not `<`.
+ */
+export function decodeHtmlEntities(text: string): string {
 	return text
 		.replace(/&#(\d+);/g, (_match: string, code: string) =>
-			String.fromCharCode(Number(code)),
+			codePointToString(Number(code)),
 		)
 		.replace(/&#x([0-9a-f]+);/gi, (_match: string, hex: string) =>
-			String.fromCharCode(Number.parseInt(hex, 16)),
+			codePointToString(Number.parseInt(hex, 16)),
 		)
-		.replace(/&amp;/g, "&")
 		.replace(/&lt;/g, "<")
 		.replace(/&gt;/g, ">")
 		.replace(/&quot;/g, '"')
 		.replace(/&#39;/g, "'")
 		.replace(/&apos;/g, "'")
-		.replace(/&nbsp;/g, " ");
+		.replace(/&nbsp;/g, " ")
+		.replace(/&amp;/g, "&");
+}
+
+/**
+ * Convert an HTML string to plain text: drop <style>/<script> blocks and tags,
+ * decode entities, and collapse whitespace. The result is plain text, so callers
+ * that put it back into HTML must escape it (see `escapeHtml`). Previously
+ * entities were left encoded, so "Name &lt;a@b&gt; wrote:" showed as a literal
+ * "&lt;" in the collapsed-message preview and in quoted replies (#86).
+ */
+export function stripHtml(html: string): string {
+	return decodeHtmlEntities(
+		html
+			.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+			.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+			.replace(/<[^>]*>/g, ""),
+	)
+		.replace(/\s+/g, " ")
+		.trim();
 }
 
 export function getSnippetText(

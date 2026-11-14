@@ -107,6 +107,7 @@ function useInvalidateEmailData() {
 export function useSendEmail() {
 	const invalidate = useInvalidateEmailData();
 	return useMutation({
+		meta: { handlesOwnError: true }, // the caller shows its own error
 		mutationFn: ({
 			mailboxId,
 			email,
@@ -232,6 +233,7 @@ export function useMoveEmail() {
 export function useSaveDraft() {
 	const invalidate = useInvalidateEmailData();
 	return useMutation({
+		meta: { handlesOwnError: true }, // the caller shows its own error
 		mutationFn: ({
 			mailboxId,
 			draft,
@@ -255,6 +257,7 @@ export function useSaveDraft() {
 export function useReplyToEmail() {
 	const invalidate = useInvalidateEmailData();
 	return useMutation({
+		meta: { handlesOwnError: true }, // the caller shows its own error
 		mutationFn: ({
 			mailboxId,
 			emailId,
@@ -268,6 +271,7 @@ export function useReplyToEmail() {
 export function useForwardEmail() {
 	const invalidate = useInvalidateEmailData();
 	return useMutation({
+		meta: { handlesOwnError: true }, // the caller shows its own error
 		mutationFn: ({
 			mailboxId,
 			emailId,

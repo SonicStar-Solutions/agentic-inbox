@@ -10,6 +10,7 @@ import * as schema from "../db/schema";
 import { Folders } from "../../shared/folders";
 import type { Env } from "../types";
 import { applyMigrations, mailboxMigrations } from "./migrations";
+import { splitLikeTerm } from "../lib/search";
 
 /**
  * SQL expression to normalize email subjects by stripping common
@@ -671,20 +672,28 @@ export class MailboxDO extends DurableObject<Env> {
 			return `?${paramIdx}`;
 		};
 
+		// DO SQLite rejects LIKE patterns over 50 bytes, so a long term is split
+		// into <=48-byte chunks that are ANDed together (each chunk may match in
+		// any of the given columns). Short terms behave exactly as before (#36).
+		const likeAny = (columns: string[], term: string): string =>
+			splitLikeTerm(term)
+				.map((chunk) => {
+					const p = addParam(`%${chunk}%`);
+					return `(${columns.map((col) => `${prefix}${col} LIKE ${p}`).join(" OR ")})`;
+				})
+				.join(" AND ");
+
 		if (query) {
-			const p1 = addParam(`%${query}%`);
-			const p2 = addParam(`%${query}%`);
-			const p3 = addParam(`%${query}%`);
-			const p4 = addParam(`%${query}%`);
-			conditions.push(`(${prefix}subject LIKE ${p1} OR ${prefix}body LIKE ${p2} OR ${prefix}sender LIKE ${p3} OR ${prefix}recipient LIKE ${p4} OR ${prefix}cc LIKE ${p4} OR ${prefix}bcc LIKE ${p4})`);
+			const c = likeAny(["subject", "body", "sender", "recipient", "cc", "bcc"], query);
+			if (c) conditions.push(`(${c})`);
 		}
 		if (folder) {
 			const p = addParam(folder);
 			conditions.push(`${prefix}folder_id = (SELECT id FROM folders WHERE name = ${p} OR id = ${p} LIMIT 1)`);
 		}
-		if (from) { const p = addParam(`%${from}%`); conditions.push(`${prefix}sender LIKE ${p}`); }
-		if (to) { const p = addParam(`%${to}%`); conditions.push(`(${prefix}recipient LIKE ${p} OR ${prefix}cc LIKE ${p} OR ${prefix}bcc LIKE ${p})`); }
-		if (subject) { const p = addParam(`%${subject}%`); conditions.push(`${prefix}subject LIKE ${p}`); }
+		if (from) { const c = likeAny(["sender"], from); if (c) conditions.push(`(${c})`); }
+		if (to) { const c = likeAny(["recipient", "cc", "bcc"], to); if (c) conditions.push(`(${c})`); }
+		if (subject) { const c = likeAny(["subject"], subject); if (c) conditions.push(`(${c})`); }
 		if (date_start) { const p = addParam(date_start); conditions.push(`${prefix}date >= ${p}`); }
 		if (date_end) { const p = addParam(date_end); conditions.push(`${prefix}date <= ${p}`); }
 		if (is_read !== undefined) { const p = addParam(is_read ? 1 : 0); conditions.push(`${prefix}read = ${p}`); }
@@ -779,6 +788,28 @@ export class MailboxDO extends DurableObject<Env> {
 			}
 
 			return String((row as any).thread_id);
+		}
+		return null;
+	}
+
+	/**
+	 * Find the thread of an already-stored message by its RFC 5322 Message-ID.
+	 *
+	 * `messageIds` is ordered by priority (nearest ancestor first); the thread of
+	 * the first one that is stored wins. Returns null if none are stored.
+	 */
+	async findThreadByMessageIds(messageIds: string[]): Promise<string | null> {
+		const ids = [...new Set(messageIds.filter(Boolean))].slice(0, 25);
+		if (ids.length === 0) return null;
+
+		const placeholders = ids.map(() => "?").join(", ");
+		const rows = this.ctx.storage.sql
+			.exec(`SELECT id, thread_id, message_id FROM emails WHERE message_id IN (${placeholders})`, ...ids)
+			.toArray();
+
+		for (const id of ids) {
+			const row = rows.find((r) => (r as any).message_id === id) as any;
+			if (row) return String(row.thread_id || row.id);
 		}
 		return null;
 	}

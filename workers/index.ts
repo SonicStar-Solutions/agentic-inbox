@@ -5,8 +5,9 @@
 import { type Context, Hono } from "hono";
 import { cors } from "hono/cors";
 import PostalMime from "postal-mime";
+import { getAgentByName } from "agents";
 import { z } from "zod";
-import { sendEmail } from "./email-sender";
+import { deliverEmail } from "./lib/send";
 import { storeAttachments, type StoredAttachment } from "./lib/attachments";
 import {
 	validateSender,
@@ -16,6 +17,9 @@ import {
 	listMailboxes,
 } from "./lib/email-helpers";
 import { SendEmailRequestSchema } from "./lib/schemas";
+import { parseJsonBody } from "./lib/http";
+import { logRateLimitHit } from "./lib/rate-limit";
+import { findOverlongSearchTerm, MAX_SEARCH_TERM_LENGTH } from "./lib/search";
 import { handleReplyEmail, handleForwardEmail } from "./routes/reply-forward";
 import { Folders } from "../shared/folders";
 import type { Env } from "./types";
@@ -100,7 +104,9 @@ app.get("/api/v1/mailboxes", async (c) => {
 });
 
 app.post("/api/v1/mailboxes", async (c) => {
-	const { name, settings, email: rawEmail } = CreateMailboxBody.parse(await c.req.json());
+	const parsed = await parseJsonBody(c, CreateMailboxBody);
+	if (!parsed.ok) return parsed.response;
+	const { name, settings, email: rawEmail } = parsed.data;
 	const email = rawEmail.toLowerCase();
 	const allowedAddresses = (c.env.EMAIL_ADDRESSES ?? []) as string[];
 	if (allowedAddresses.length > 0 && !allowedAddresses.map((a) => a.toLowerCase()).includes(email)) {
@@ -167,8 +173,9 @@ app.get("/api/v1/mailboxes/:mailboxId/emails", async (c: AppContext) => {
 
 app.post("/api/v1/mailboxes/:mailboxId/emails", async (c: AppContext) => {
 	const mailboxId = c.req.param("mailboxId")!;
-	const body = SendEmailRequestSchema.parse(await c.req.json());
-	const { to, cc, bcc, from, subject, html, text, attachments, in_reply_to, references, thread_id } = body;
+	const parsed = await parseJsonBody(c, SendEmailRequestSchema);
+	if (!parsed.ok) return parsed.response;
+	const { to, cc, bcc, from, subject, html, text, attachments, in_reply_to, references, thread_id } = parsed.data;
 
 	let toStr: string, fromEmail: string, fromDomain: string;
 	try {
@@ -181,39 +188,53 @@ app.post("/api/v1/mailboxes/:mailboxId/emails", async (c: AppContext) => {
 	const { messageId, outgoingMessageId } = generateMessageId(fromDomain);
 	const stub = c.var.mailboxStub;
 	const rateLimitError = await (stub as any).checkSendRateLimit();
-	if (rateLimitError) return c.json({ error: rateLimitError }, 429);
-	const attachmentData = await storeAttachments(c.env.BUCKET, messageId, attachments);
+	if (rateLimitError) {
+		logRateLimitHit("compose", mailboxId, rateLimitError);
+		return c.json({ error: rateLimitError }, 429);
+	}
+	// Deliver first: a message the binding rejects must be reported to the
+	// caller and must not be filed in Sent as if it had gone out (#84).
+	const delivery = await deliverEmail(c, c.env.EMAIL, {
+		to, cc, bcc, from, subject, html, text,
+		attachments: attachments?.map((att) => ({ content: att.content, filename: att.filename, type: att.type, disposition: att.disposition || "attachment", contentId: att.contentId })),
+		...(in_reply_to ? { headers: buildThreadingHeaders(in_reply_to, references || []) } : {}),
+	}, outgoingMessageId);
+	if (!delivery.ok) return delivery.response;
+	// Provider-assigned Message-ID (#83): what recipients actually receive, so
+	// later replies thread against a message they really have.
+	const sentMessageId = delivery.messageId;
 
-	await stub.createEmail(Folders.SENT, {
-		id: messageId, subject, sender: fromEmail, recipient: toStr,
-		cc: cc ? (Array.isArray(cc) ? cc.join(", ") : cc).toLowerCase() : null,
-		bcc: bcc ? (Array.isArray(bcc) ? bcc.join(", ") : bcc).toLowerCase() : null,
-		date: new Date().toISOString(), body: html || text || "",
-		in_reply_to: in_reply_to || null, email_references: references ? JSON.stringify(references) : null,
-		thread_id: thread_id || in_reply_to || messageId, message_id: outgoingMessageId,
-		raw_headers: JSON.stringify([
-			{ key: "from", value: typeof from === "string" ? from : `${from.name} <${from.email}>` },
-			{ key: "to", value: Array.isArray(to) ? to.join(", ") : to },
-			...(cc ? [{ key: "cc", value: Array.isArray(cc) ? cc.join(", ") : cc }] : []),
-			...(bcc ? [{ key: "bcc", value: Array.isArray(bcc) ? bcc.join(", ") : bcc }] : []),
-			{ key: "subject", value: subject }, { key: "date", value: new Date().toISOString() },
-			{ key: "message-id", value: `<${outgoingMessageId}>` },
-		]),
-	}, attachmentData);
-
-	c.executionCtx.waitUntil(
-		sendEmail(c.env.EMAIL, {
-			to, cc, bcc, from, subject, html, text,
-			attachments: attachments?.map((att) => ({ content: att.content, filename: att.filename, type: att.type, disposition: att.disposition || "attachment", contentId: att.contentId })),
-			...(in_reply_to ? { headers: buildThreadingHeaders(in_reply_to, references || []) } : {}),
-		}).catch((e) => console.error("Deferred email delivery failed:", (e as Error).message)),
-	);
+	try {
+		const attachmentData = await storeAttachments(c.env.BUCKET, messageId, attachments);
+		await stub.createEmail(Folders.SENT, {
+			id: messageId, subject, sender: fromEmail, recipient: toStr,
+			cc: cc ? (Array.isArray(cc) ? cc.join(", ") : cc).toLowerCase() : null,
+			bcc: bcc ? (Array.isArray(bcc) ? bcc.join(", ") : bcc).toLowerCase() : null,
+			date: new Date().toISOString(), body: html || text || "",
+			in_reply_to: in_reply_to || null, email_references: references ? JSON.stringify(references) : null,
+			thread_id: thread_id || in_reply_to || messageId, message_id: sentMessageId,
+			raw_headers: JSON.stringify([
+				{ key: "from", value: typeof from === "string" ? from : `${from.name} <${from.email}>` },
+				{ key: "to", value: Array.isArray(to) ? to.join(", ") : to },
+				...(cc ? [{ key: "cc", value: Array.isArray(cc) ? cc.join(", ") : cc }] : []),
+				...(bcc ? [{ key: "bcc", value: Array.isArray(bcc) ? bcc.join(", ") : bcc }] : []),
+				{ key: "subject", value: subject }, { key: "date", value: new Date().toISOString() },
+				{ key: "message-id", value: `<${sentMessageId}>` },
+			]),
+		}, attachmentData);
+	} catch (e) {
+		// The message was delivered; don't tell the client it failed (a retry
+		// would send a duplicate). Surface the storage problem in the logs.
+		console.error("Sent email delivered but could not be stored:", (e as Error).message);
+	}
 	return c.json({ id: messageId, status: "sent" }, 202);
 });
 
 app.post("/api/v1/mailboxes/:mailboxId/drafts", async (c: AppContext) => {
 	const mailboxId = c.req.param("mailboxId")!;
-	const { to, cc, bcc, subject, body, in_reply_to, thread_id, draft_id } = DraftBody.parse(await c.req.json());
+	const parsed = await parseJsonBody(c, DraftBody);
+	if (!parsed.ok) return parsed.response;
+	const { to, cc, bcc, subject, body, in_reply_to, thread_id, draft_id } = parsed.data;
 	const stub = c.var.mailboxStub;
 	if (draft_id) await stub.deleteEmail(draft_id); // not atomic — create-then-delete would be safer
 	const messageId = crypto.randomUUID();
@@ -303,6 +324,11 @@ app.get("/api/v1/mailboxes/:mailboxId/search", async (c: AppContext) => {
 		date_end: c.req.query("date_end"), is_read: boolQuery(c, "is_read"),
 		is_starred: boolQuery(c, "is_starred"), has_attachment: boolQuery(c, "has_attachment"),
 	};
+	const overlong = findOverlongSearchTerm({
+		query: searchOpts.query as string, from: searchOpts.from as string | undefined,
+		to: searchOpts.to as string | undefined, subject: searchOpts.subject as string | undefined,
+	});
+	if (overlong) return c.json({ error: `Search parameter "${overlong}" is too long (max ${MAX_SEARCH_TERM_LENGTH} characters)` }, 400);
 	const stub = c.var.mailboxStub as any;
 	const emails = await stub.searchEmails({ ...searchOpts, page: intQuery(c, "page"), limit: intQuery(c, "limit") });
 	const totalCount = await stub.countSearchResults(searchOpts);
@@ -345,22 +371,39 @@ async function streamToArrayBuffer(stream: ReadableStream, streamSize: number) {
 	return result;
 }
 
-async function receiveEmail(event: { raw: ReadableStream; rawSize: number }, env: Env, ctx: ExecutionContext) {
+/** The subset of `ForwardableEmailMessage` that receiveEmail uses. */
+export type InboundEmailEvent = Pick<ForwardableEmailMessage, "raw" | "rawSize" | "to" | "from">;
+
+async function receiveEmail(event: InboundEmailEvent, env: Env, ctx: ExecutionContext) {
 	const rawEmail = await streamToArrayBuffer(event.raw, event.rawSize);
 	const parsedEmail = await new PostalMime().parse(rawEmail);
 
-	if (!parsedEmail.to?.length || !parsedEmail.to[0].address) throw new Error("received email with empty to");
-
 	const allowedAddresses = ((env.EMAIL_ADDRESSES ?? []) as string[]).map((a) => a.toLowerCase());
-	const allRecipients = parsedEmail.to.map((t) => t.address?.toLowerCase()).filter(Boolean) as string[];
+	const allRecipients = (parsedEmail.to || []).map((t) => t.address?.toLowerCase()).filter(Boolean) as string[];
 	const ccRecipients = (parsedEmail.cc || []).map((e) => e.address?.toLowerCase()).filter(Boolean) as string[];
 	const bccRecipients = (parsedEmail.bcc || []).map((e) => e.address?.toLowerCase()).filter(Boolean) as string[];
 
+	// The SMTP envelope recipient (RCPT TO) is authoritative: it is what Email
+	// Routing matched, and the only address that survives Bcc, Cc-only delivery,
+	// aliases and mailing lists. The To: header is only a display/threading hint
+	// and routinely names someone else (#32).
+	const envelopeTo = event.to?.trim().toLowerCase();
 	let mailboxId: string | undefined;
-	if (allowedAddresses.length > 0) {
-		mailboxId = allRecipients.find((addr) => allowedAddresses.includes(addr));
-		if (!mailboxId) { console.log(`Ignoring email: no recipient matches EMAIL_ADDRESSES.`); return; }
-	} else { mailboxId = allRecipients[0]; }
+	if (envelopeTo) {
+		if (allowedAddresses.length > 0 && !allowedAddresses.includes(envelopeTo)) {
+			console.log(`Ignoring email: ${envelopeTo} is not in EMAIL_ADDRESSES.`);
+			return;
+		}
+		mailboxId = envelopeTo;
+	} else {
+		// No envelope available (e.g. a caller that only supplies the raw message):
+		// fall back to the To: header as before.
+		if (!allRecipients.length) throw new Error("received email with empty to");
+		if (allowedAddresses.length > 0) {
+			mailboxId = allRecipients.find((addr) => allowedAddresses.includes(addr));
+			if (!mailboxId) { console.log(`Ignoring email: no recipient matches EMAIL_ADDRESSES.`); return; }
+		} else { mailboxId = allRecipients[0]; }
+	}
 	if (!mailboxId) throw new Error("received email with no valid recipient address");
 
 	const messageId = crypto.randomUUID();
@@ -383,9 +426,19 @@ async function receiveEmail(event: { raw: ReadableStream; rawSize: number }, env
 	const extractMsgId = (s: string) => { const m = s.match(/<([^>]+)>/); return m ? m[1] : s.trim().split(/\s+/)[0]; };
 	const inReplyTo = parsedEmail.inReplyTo ? extractMsgId(parsedEmail.inReplyTo) : null;
 	const emailReferences = parsedEmail.references ? parsedEmail.references.split(/\s+/).filter(Boolean).map(extractMsgId) : [];
+	// Thread resolution (#85). A reply names its parent in In-Reply-To /
+	// References, but the parent's stored thread_id is an internal id (or the
+	// root's Message-ID), not the header value. Look the referenced messages up
+	// by their stored Message-ID and join the thread of the nearest one we have.
+	// If none are stored, keep the old behaviour of keying the thread on the
+	// root Message-ID; messages with no threading headers fall back to subject.
 	let threadId = emailReferences[0] || inReplyTo || messageId;
 
-	if (!inReplyTo && emailReferences.length === 0) {
+	if (inReplyTo || emailReferences.length > 0) {
+		const candidates = [inReplyTo, ...[...emailReferences].reverse()].filter(Boolean) as string[];
+		const parentThread = await (stub as any).findThreadByMessageIds(candidates);
+		if (parentThread) threadId = parentThread;
+	} else {
 		const subjectThread = await (stub as any).findThreadBySubject(parsedEmail.subject || "", parsedEmail.from?.address || undefined);
 		if (subjectThread) threadId = subjectThread;
 	}
@@ -394,7 +447,9 @@ async function receiveEmail(event: { raw: ReadableStream; rawSize: number }, env
 
 	await stub.createEmail(Folders.INBOX, {
 		id: messageId, subject: parsedEmail.subject || "",
-		sender: (parsedEmail.from?.address || "").toLowerCase(), recipient: allRecipients.join(", "),
+		sender: (parsedEmail.from?.address || "").toLowerCase(),
+		// Header To: for context (e.g. the list address); the envelope recipient when absent.
+		recipient: (allRecipients.length > 0 ? allRecipients : [mailboxId]).join(", "),
 		cc: ccRecipients.join(", ") || null, bcc: bccRecipients.join(", ") || null,
 		date: new Date().toISOString(), // uses receive time, not the email's Date header
 		body: parsedEmail.html || parsedEmail.text || "",
@@ -402,11 +457,21 @@ async function receiveEmail(event: { raw: ReadableStream; rawSize: number }, env
 		thread_id: threadId, message_id: originalMessageId, raw_headers: JSON.stringify(parsedEmail.headers),
 	}, attachmentData);
 
-	const agentStub = env.EMAIL_AGENT.get(env.EMAIL_AGENT.idFromName(mailboxId));
-	ctx.waitUntil(agentStub.fetch(new Request("https://agents/onNewEmail", {
-		method: "POST", headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ mailboxId, emailId: messageId, sender: (parsedEmail.from?.address || "").toLowerCase(), subject: parsedEmail.subject || "", threadId }),
-	})).catch((e) => console.error("Auto-draft trigger failed:", (e as Error).message)));
+	// Resolve the agent through the SDK: getAgentByName performs the set-name
+	// handshake, which a bare idFromName()/get() stub skips. Without it, an agent
+	// instance that was never opened in the UI throws "Missing namespace or room
+	// headers" and auto-draft silently never runs (#57).
+	ctx.waitUntil(
+		getAgentByName(env.EMAIL_AGENT, mailboxId)
+			.then((agentStub) => agentStub.fetch(new Request("https://agents/onNewEmail", {
+				method: "POST", headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ mailboxId, emailId: messageId, sender: (parsedEmail.from?.address || "").toLowerCase(), subject: parsedEmail.subject || "", threadId }),
+			})))
+			.then((res) => {
+				if (!res.ok) console.error(`Auto-draft trigger failed for ${mailboxId}: HTTP ${res.status}`);
+			})
+			.catch((e) => console.error(`Auto-draft trigger failed for ${mailboxId}:`, (e as Error).message)),
+	);
 }
 
 export { app, receiveEmail };

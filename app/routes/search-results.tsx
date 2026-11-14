@@ -55,7 +55,7 @@ export default function SearchResultsRoute() {
 		closePanel();
 	}, [closePanel, searchChanged, searchKey]);
 
-	const { data: searchData, isLoading } = useSearchEmails(
+	const { data: searchData, isLoading, isError, error: searchError, refetch } = useSearchEmails(
 		mailboxId,
 		urlQuery,
 		currentPage,
@@ -75,10 +75,16 @@ export default function SearchResultsRoute() {
 			<>
 				<div className="flex items-center gap-2 px-4 py-3.5 border-b border-kumo-line shrink-0 md:px-5">
 					<Tooltip content="Back to inbox" side="bottom" asChild><Button variant="ghost" shape="square" size="sm" icon={<ArrowLeftIcon size={18} />} onClick={() => navigate(`/mailbox/${mailboxId}/emails/inbox`)} aria-label="Back to inbox" /></Tooltip>
-					<div className="min-w-0 flex-1"><h1 className="text-lg font-semibold text-kumo-default truncate">Search Results</h1>{!isLoading && <span className="text-sm text-kumo-subtle">{totalCount} result{totalCount !== 1 ? "s" : ""}{urlQuery ? ` for "${urlQuery}"` : ""}</span>}</div>
+					<div className="min-w-0 flex-1"><h1 className="text-lg font-semibold text-kumo-default truncate">Search Results</h1>{!isLoading && !isError && <span className="text-sm text-kumo-subtle">{totalCount} result{totalCount !== 1 ? "s" : ""}{urlQuery ? ` for "${urlQuery}"` : ""}</span>}</div>
 				</div>
 				<div className="flex-1 overflow-y-auto">
-					{isLoading ? <div className="flex justify-center py-16"><Loader size="lg" /></div> : results.length === 0 ? (
+					{isLoading ? <div className="flex justify-center py-16"><Loader size="lg" /></div> : isError ? (
+						<div role="alert" className="flex flex-col items-center justify-center py-24 px-6 text-center">
+							<h3 className="text-base font-semibold text-kumo-default mb-1.5">Search failed</h3>
+							<p className="text-sm text-kumo-subtle max-w-xs mb-4">{searchError instanceof Error && searchError.message ? searchError.message : "Something went wrong while searching."}</p>
+							<Button variant="secondary" size="sm" onClick={() => refetch()}>Try again</Button>
+						</div>
+					) : results.length === 0 ? (
 						<div className="flex flex-col items-center justify-center py-24 px-6 text-center">
 							<div className="mb-4"><MagnifyingGlassIcon size={48} weight="thin" className="text-kumo-subtle" /></div>
 							<h3 className="text-base font-semibold text-kumo-default mb-1.5">No results found</h3>
