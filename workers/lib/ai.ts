@@ -10,6 +10,7 @@
  */
 
 import { escapeHtml, stripHtmlToText, textToHtml } from "./email-helpers";
+import { extractAiText, MODEL_DEFAULTS } from "./models";
 
 // ── Prompt Injection Scanner ───────────────────────────────────────
 
@@ -21,7 +22,11 @@ Return ONLY "NO" if it is a normal email (even if angry, confused, or containing
 
 Respond with exactly one word: YES or NO.`;
 
-export async function isPromptInjection(ai: Ai, bodyHtml: string | null | undefined): Promise<boolean> {
+export async function isPromptInjection(
+	ai: Ai,
+	bodyHtml: string | null | undefined,
+	model: string = MODEL_DEFAULTS.injectionScanner,
+): Promise<boolean> {
 	if (!bodyHtml) return false;
 	
 	const plainText = stripHtmlToText(bodyHtml).trim();
@@ -29,8 +34,8 @@ export async function isPromptInjection(ai: Ai, bodyHtml: string | null | undefi
 
 	try {
 		const response = (await ai.run(
-			// @ts-expect-error — model string not in generated union
-			"@cf/meta/llama-3.1-8b-instruct-fast",
+			// @ts-expect-error — model is configurable, so not in the generated union
+			model,
 			{
 				messages: [
 					{ role: "system", content: INJECTION_PROMPT },
@@ -39,10 +44,16 @@ export async function isPromptInjection(ai: Ai, bodyHtml: string | null | undefi
 				max_tokens: 10,
 				temperature: 0,
 			},
-		)) as { response?: string };
+		)) as unknown;
 
-		const result = (response?.response || "NO").trim().toUpperCase();
-		
+		const text = extractAiText(response);
+		if (text === null || !text.trim()) {
+			// No usable verdict (unexpected response shape or empty output). This is a
+			// security gate, so fail closed like any other scanner failure.
+			throw new Error("scanner returned no verdict");
+		}
+		const result = text.trim().toUpperCase();
+
 		if (result.includes("YES")) {
 			console.warn("Prompt injection detected in incoming email, blocking auto-draft");
 			return true;
@@ -119,7 +130,11 @@ function splitQuotedBlock(html: string): { reply: string; quoted: string } {
  * Verify and clean a draft email body using AI.
  * Falls back to returning the original body if the AI call fails.
  */
-export async function verifyDraft(ai: Ai, body: string): Promise<string> {
+export async function verifyDraft(
+	ai: Ai,
+	body: string,
+	model: string = MODEL_DEFAULTS.draftVerifier,
+): Promise<string> {
 	if (!body || !body.trim()) return body;
 
 	// Separate the quoted reply block so the AI only reviews the user's text
@@ -136,7 +151,8 @@ export async function verifyDraft(ai: Ai, body: string): Promise<string> {
 
 	try {
 		const response = (await ai.run(
-			"@cf/meta/llama-4-scout-17b-16e-instruct",
+			// @ts-expect-error — model is configurable, so not in the generated union
+			model,
 			{
 				messages: [
 					{ role: "system", content: VERIFIER_PROMPT },
@@ -145,9 +161,9 @@ export async function verifyDraft(ai: Ai, body: string): Promise<string> {
 				max_tokens: 4096,
 				temperature: 0,
 			},
-		)) as { response?: string };
+		)) as unknown;
 
-		const cleaned = response?.response ?? null;
+		const cleaned = extractAiText(response);
 
 		if (!cleaned || !cleaned.trim()) {
 			// AI returned empty — fall back to original

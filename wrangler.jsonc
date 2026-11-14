@@ -15,6 +15,11 @@
 		// The worker now fails closed outside local development if Access is not configured.
 		"DOMAINS": "example.com",
 		"EMAIL_ADDRESSES": []
+		// Optional Workers AI model overrides (defaults live in workers/lib/models.ts):
+		// "AI_MODEL_AGENT": "@cf/moonshotai/kimi-k2.5",
+		// "AI_MODEL_AUTO_DRAFT": "@cf/moonshotai/kimi-k2.5",
+		// "AI_MODEL_INJECTION_SCANNER": "@cf/zai-org/glm-4.7-flash",
+		// "AI_MODEL_DRAFT_VERIFIER": "@cf/meta/llama-4-scout-17b-16e-instruct"
 	},
 	"send_email": [
 		{
