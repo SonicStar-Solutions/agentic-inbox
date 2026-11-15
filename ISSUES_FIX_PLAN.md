@@ -113,4 +113,3 @@ Order matters for the send path: #84 before #83.
 8. README/docs pass (#4, #5, #6, #27, #54, #77, #31)
 
 Biggest open question: for steps 2-4 (and others), upstream PRs already exist. Merging their branches into your fork saves time but you should review each (several overlap, e.g. #32 has three competing PRs).
-
