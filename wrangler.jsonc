@@ -2,6 +2,9 @@
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "agentic-inbox",
 	"compatibility_date": "2025-11-28",
+	// Keep variables edited in the Cloudflare dashboard (DOMAINS, EMAIL_ADDRESSES)
+	// instead of overwriting them with the placeholders below on every deploy.
+	"keep_vars": true,
 	"main": "./workers/app.ts",
 	"observability": {
 		"enabled": true
@@ -50,6 +53,10 @@
 			{
 				"name": "EMAIL_MCP",
 				"class_name": "EmailMCP"
+			},
+			{
+				"name": "IMPORT_JOB",
+				"class_name": "ImportJobDO"
 			}
 		]
 	},
@@ -70,6 +77,15 @@
 			"tag": "v3",
 			"new_sqlite_classes": [
 				"EmailMCP"
+			]
+		},
+		{
+			// Import-from-IMAP job. Deployments that ran an earlier build already have
+			// this tag applied, so never rename or reorder it (Wrangler would replay
+			// v1-v3 and fail with error 10074).
+			"tag": "v4",
+			"new_sqlite_classes": [
+				"ImportJobDO"
 			]
 		}
 	]

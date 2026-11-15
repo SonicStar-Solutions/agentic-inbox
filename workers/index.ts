@@ -28,6 +28,14 @@ import { resolveReceivedDate } from "./lib/received-date";
 import { logRateLimitHit } from "./lib/rate-limit";
 import { findOverlongSearchTerm, MAX_SEARCH_TERM_LENGTH } from "./lib/search";
 import { handleReplyEmail, handleForwardEmail } from "./routes/reply-forward";
+import {
+	handleCancelImapImport,
+	handleDismissImportFailures,
+	handleGetImapImportStatus,
+	handleProbeImap,
+	handleRetryFailedImport,
+	handleStartImapImport,
+} from "./routes/importImap";
 import { Folders } from "../shared/folders";
 import type { Env } from "./types";
 import { requireMailbox, type MailboxContext } from "./lib/mailbox";
@@ -367,6 +375,15 @@ app.post("/api/v1/mailboxes/:mailboxId/threads/:threadId/read", async (c: AppCon
 
 app.post("/api/v1/mailboxes/:mailboxId/emails/:id/reply", handleReplyEmail);
 app.post("/api/v1/mailboxes/:mailboxId/emails/:id/forward", handleForwardEmail);
+
+// -- Import from another provider (IMAP) -----------------------------
+
+app.post("/api/v1/mailboxes/:mailboxId/import/imap/test", handleProbeImap);
+app.post("/api/v1/mailboxes/:mailboxId/import/imap/start", handleStartImapImport);
+app.get("/api/v1/mailboxes/:mailboxId/import/imap/status", handleGetImapImportStatus);
+app.post("/api/v1/mailboxes/:mailboxId/import/imap/cancel", handleCancelImapImport);
+app.post("/api/v1/mailboxes/:mailboxId/import/imap/retry-failed", handleRetryFailedImport);
+app.post("/api/v1/mailboxes/:mailboxId/import/imap/dismiss-failures", handleDismissImportFailures);
 
 // -- Folders --------------------------------------------------------
 

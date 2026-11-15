@@ -1328,12 +1328,69 @@ export class MailboxDO extends DurableObject<Env> {
 
 	// ── Email creation (Drizzle) ───────────────────────────────────
 
+	/** Tell connected browsers to refetch. Used by the importer, which inserts quietly and notifies once per batch. */
+	async notifyChanged(scope: "emails" | "folders" | "all" = "all") {
+		this.#notify(scope);
+	}
+
+	/** True when a message with this Message-ID is already stored (used to skip duplicates on import). */
+	async hasMessageId(messageId: string): Promise<boolean> {
+		const rows = this.ctx.storage.sql
+			.exec("SELECT 1 AS found FROM emails WHERE message_id = ? LIMIT 1", messageId)
+			.toArray();
+		return rows.length > 0;
+	}
+
+	/**
+	 * Stored messages whose subject ends with `normalizedSubject`, as candidates
+	 * for import-time subject threading. The caller applies the matching rules.
+	 */
+	async findImportThreadCandidates(normalizedSubject: string): Promise<
+		{ thread_id: string; subject: string | null; sender: string | null; recipient: string | null; date: string }[]
+	> {
+		if (!normalizedSubject) return [];
+		const escaped = normalizedSubject.replace(/[\\%_]/g, (c) => `\\${c}`);
+		return this.ctx.storage.sql
+			.exec(
+				`SELECT COALESCE(thread_id, id) AS thread_id, subject, sender, recipient, date
+				 FROM emails
+				 WHERE LOWER(subject) LIKE ? ESCAPE '\\'
+				 ORDER BY date DESC
+				 LIMIT 100`,
+				`%${escaped}`,
+			)
+			.toArray() as any;
+	}
+
+	/** The id of the folder with this name, creating it if it does not exist yet. */
+	async ensureFolderByName(name: string): Promise<string> {
+		const wanted = name.trim();
+		const existing = this.ctx.storage.sql
+			.exec("SELECT id FROM folders WHERE LOWER(name) = LOWER(?) LIMIT 1", wanted)
+			.toArray();
+		if (existing.length > 0) return String((existing[0] as any).id);
+
+		const base =
+			wanted
+				.toLowerCase()
+				.replace(/[^\p{L}\p{N}]+/gu, "-")
+				.replace(/^-+|-+$/g, "")
+				.slice(0, 40) || "imported";
+		for (let i = 0; i < 50; i++) {
+			const id = i === 0 ? base : `${base}-${i + 1}`;
+			const created = await this.createFolder(id, wanted);
+			if (created) return id;
+		}
+		throw new Error(`Could not create folder "${wanted}"`);
+	}
+
 	async createEmail(
 		folder: string,
 		email: EmailData,
 		attachments: AttachmentData[],
+		options: { silent?: boolean } = {},
 	) {
-		this.#notify("emails");
+		if (!options.silent) this.#notify("emails");
 		// Resolve folder name or ID to the actual folder ID.
 		const folderRow = this.db
 			.select({ id: schema.folders.id })
