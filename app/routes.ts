@@ -16,6 +16,7 @@ export default [
 		route("label/:labelId", "routes/email-list.tsx", { id: "label-list" }),
 		route("scheduled", "routes/scheduled.tsx"),
 		route("settings", "routes/settings.tsx"),
+		route("import", "routes/import.tsx"),
 		route("search", "routes/search-results.tsx"),
 	]),
 	route("*", "routes/not-found.tsx"),
