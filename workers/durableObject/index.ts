@@ -75,6 +75,12 @@ interface SearchFilterOptions {
 	group_by_thread?: boolean;
 }
 
+/** Keyset position: only rows strictly older than this (date, then id) are returned. */
+export interface BeforeCursor {
+	date: string;
+	id: string;
+}
+
 interface GetEmailsOptions {
 	folder?: string;
 	thread_id?: string;
@@ -82,6 +88,8 @@ interface GetEmailsOptions {
 	limit?: number;
 	sortColumn?: SortColumn;
 	sortDirection?: "ASC" | "DESC";
+	/** Newest-first keyset paging, used by the domain-wide merged list. Ignores `page`. */
+	before?: BeforeCursor;
 }
 
 interface EmailData {
@@ -201,6 +209,7 @@ export class MailboxDO extends DurableObject<Env> {
 			limit: rawLimit = 25,
 			sortColumn: rawSortColumn = "date",
 			sortDirection = "DESC",
+			before,
 		} = options;
 
 		// Cap pagination limit to prevent unbounded queries
@@ -212,7 +221,7 @@ export class MailboxDO extends DurableObject<Env> {
 			? rawSortColumn
 			: "date";
 
-		const offset = (page - 1) * limit;
+		const offset = before ? 0 : (page - 1) * limit;
 
 		const conditions: SQL[] = [];
 		if (folder) {
@@ -222,6 +231,11 @@ export class MailboxDO extends DurableObject<Env> {
 		}
 		if (thread_id) {
 			conditions.push(eq(schema.emails.thread_id, thread_id));
+		}
+		if (before) {
+			conditions.push(
+				sql`(${schema.emails.date} < ${before.date} OR (${schema.emails.date} = ${before.date} AND ${schema.emails.id} < ${before.id}))`,
+			);
 		}
 
 		const orderCol = SORT_COLUMN_MAP[sortColumn];
@@ -246,7 +260,8 @@ export class MailboxDO extends DurableObject<Env> {
 			})
 			.from(schema.emails)
 			.where(conditions.length > 0 ? and(...conditions) : undefined)
-			.orderBy(orderDir)
+			// id breaks date ties the same way the merged domain list does, so paging is stable.
+			.orderBy(orderDir, sortDirection === "ASC" ? asc(schema.emails.id) : desc(schema.emails.id))
 			.limit(limit)
 			.offset(offset)
 			.all();
@@ -297,6 +312,7 @@ export class MailboxDO extends DurableObject<Env> {
 			folder,
 			page = 1,
 			limit: rawLimit = 25,
+			before,
 		} = options;
 		const limit = Math.min(Math.max(rawLimit, 1), 100);
 
@@ -305,7 +321,10 @@ export class MailboxDO extends DurableObject<Env> {
 			return this.getEmails(options);
 		}
 
-		const offset = (page - 1) * limit;
+		const offset = before ? 0 : (page - 1) * limit;
+		// ?4/?5 are the keyset position; NULL means "first page", so one statement serves both.
+		const beforeDate = before?.date ?? null;
+		const beforeId = before?.id ?? null;
 
 		// Thread grouping strategy:
 		// For DRAFT folder: group by in_reply_to (the email being replied to).
@@ -354,9 +373,10 @@ export class MailboxDO extends DurableObject<Env> {
 				FROM latest_per_group lp
 				JOIN draft_stats ds ON lp.draft_group_key = ds.draft_group_key
 				WHERE lp.rn = 1
-				ORDER BY lp.date DESC
+					AND (?4 IS NULL OR lp.date < ?4 OR (lp.date = ?4 AND lp.id < ?5))
+				ORDER BY lp.date DESC, lp.id DESC
 				LIMIT ?2 OFFSET ?3`,
-				folder, limit, offset
+				folder, limit, offset, beforeDate, beforeId
 			);
 
 			const rows = [...result];
@@ -449,9 +469,10 @@ export class MailboxDO extends DurableObject<Env> {
 			LEFT JOIN latest_message_per_conversation lmc
 				ON lmc.conversation_id = lif.conversation_id AND lmc.rn = 1
 			WHERE lif.rn = 1
-			ORDER BY lif.date DESC
+				AND (?4 IS NULL OR lif.date < ?4 OR (lif.date = ?4 AND lif.id < ?5))
+			ORDER BY lif.date DESC, lif.id DESC
 			LIMIT ?2 OFFSET ?3`,
-			folder, limit, offset
+			folder, limit, offset, beforeDate, beforeId
 		);
 
 		const rows = [...result];
@@ -809,13 +830,25 @@ export class MailboxDO extends DurableObject<Env> {
 		return { conditions, params };
 	}
 
-	async searchEmails(options: SearchFilterOptions & { page?: number; limit?: number }) {
-		const { page = 1, limit: rawLimit = 25 } = options;
+	async searchEmails(options: SearchFilterOptions & { page?: number; limit?: number; before?: BeforeCursor }) {
+		const { page = 1, limit: rawLimit = 25, before } = options;
 		const limit = Math.min(Math.max(rawLimit, 1), 100);
 		const { conditions, params } = this.#buildSearchConditions(options, "e");
 
+		// Keyset paging (domain-wide merged search). Grouped results are filtered after grouping,
+		// so a conversation's newest match is what the cursor compares against.
+		let keyset = "";
+		if (before) {
+			params.push(before.date, before.id);
+			const d = `?${params.length - 1}`;
+			const i = `?${params.length}`;
+			const col = (name: string) => (options.group_by_thread ? name : `e.${name}`);
+			keyset = `(${col("date")} < ${d} OR (${col("date")} = ${d} AND ${col("id")} < ${i}))`;
+		}
+		if (keyset && !options.group_by_thread) conditions.push(keyset);
+
 		const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-		const offset = (page - 1) * limit;
+		const offset = before ? 0 : (page - 1) * limit;
 
 		// Grouped by conversation (#89): newest matching message per thread, and how
 		// many messages of the thread matched.
@@ -832,8 +865,8 @@ export class MailboxDO extends DurableObject<Env> {
 				FROM emails e
 				LEFT JOIN folders f ON e.folder_id = f.id
 				${where}
-			) WHERE rn = 1
-			ORDER BY date DESC LIMIT ?${params.length + 1} OFFSET ?${params.length + 2}`
+			) WHERE rn = 1${keyset ? ` AND ${keyset}` : ""}
+			ORDER BY date DESC, id DESC LIMIT ?${params.length + 1} OFFSET ?${params.length + 2}`
 			: `
 			SELECT e.id, e.subject, e.sender, e.recipient, e.cc, e.bcc, e.date,
 				e.read, e.starred, e.in_reply_to, e.email_references,
@@ -843,7 +876,7 @@ export class MailboxDO extends DurableObject<Env> {
 			FROM emails e
 			LEFT JOIN folders f ON e.folder_id = f.id
 			${where}
-			ORDER BY e.date DESC LIMIT ?${params.length + 1} OFFSET ?${params.length + 2}`;
+			ORDER BY e.date DESC, e.id DESC LIMIT ?${params.length + 1} OFFSET ?${params.length + 2}`;
 		params.push(limit, offset);
 
 		const result = this.ctx.storage.sql.exec(query, ...params);

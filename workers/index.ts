@@ -28,6 +28,7 @@ import { resolveReceivedDate } from "./lib/received-date";
 import { logRateLimitHit } from "./lib/rate-limit";
 import { findOverlongSearchTerm, MAX_SEARCH_TERM_LENGTH } from "./lib/search";
 import { handleReplyEmail, handleForwardEmail } from "./routes/reply-forward";
+import { handleDomainEmails, handleDomainSearch, handleDomainFolders } from "./routes/domain-inbox";
 import {
 	handleCancelImapImport,
 	handleDismissImportFailures,
@@ -114,8 +115,20 @@ app.get("/api/v1/config", (c) => {
 
 app.get("/api/v1/mailboxes", async (c) => {
 	const allMailboxes = await listMailboxes(c.env.BUCKET);
-	return c.json(allMailboxes.map((m) => ({ ...m, name: m.id })));
+	// The display name lives in each mailbox's settings blob; sending it here saves clients one
+	// request per mailbox just to label a list.
+	const withNames = await Promise.all(allMailboxes.map(async (m) => {
+		const fromName = (await readMailboxSettings(c.env.BUCKET, m.id)).fromName;
+		return { ...m, name: m.id, fromName: typeof fromName === "string" && fromName.trim() ? fromName.trim() : null };
+	}));
+	return c.json(withNames);
 });
+
+// -- Domain-wide "All inboxes" (merged across the domain's mailboxes) -
+
+app.get("/api/v1/domains/:domain/emails", handleDomainEmails);
+app.get("/api/v1/domains/:domain/search", handleDomainSearch);
+app.get("/api/v1/domains/:domain/folders", handleDomainFolders);
 
 app.post("/api/v1/mailboxes", async (c) => {
 	const parsed = await parseJsonBody(c, CreateMailboxBody);
