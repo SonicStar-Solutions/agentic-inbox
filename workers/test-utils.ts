@@ -46,6 +46,23 @@ export function makeFakeMailboxStub() {
 			const [row] = rows.splice(i, 1);
 			return row.attachments;
 		},
+		async hasMessageId(id: string) {
+			return rows.some((r) => r.email.message_id === id);
+		},
+		async findImportThreadCandidates(normalized: string) {
+			return rows
+				.filter((r) => String(r.email.subject ?? "").toLowerCase().endsWith(normalized))
+				.map((r) => ({
+					thread_id: (r.email.thread_id as string) ?? (r.email.id as string),
+					subject: r.email.subject as string,
+					sender: r.email.sender as string,
+					recipient: r.email.recipient as string,
+					date: r.email.date as string,
+				}));
+		},
+		async notifyChanged(_scope?: string) {
+			calls.push("notifyChanged");
+		},
 		async findThreadBySubject(_subject: string, _sender?: string) {
 			return null as string | null;
 		},
@@ -67,6 +84,7 @@ export function makeFakeEnv(opts: {
 	sendImpl?: (message: any) => Promise<{ messageId: string }>;
 	emailAddresses?: string[];
 	stubs?: Record<string, FakeMailboxStub>;
+	importJobs?: Record<string, any>;
 } = {}) {
 	const mailboxes = new Set((opts.mailboxes ?? ["alice@example.com"]).map((m) => m.toLowerCase()));
 	const stubs: Record<string, FakeMailboxStub> = opts.stubs ?? {};
@@ -106,6 +124,10 @@ export function makeFakeEnv(opts: {
 		MAILBOX: {
 			idFromName: (name: string) => name,
 			get: (id: string) => (stubs[id] ??= makeFakeMailboxStub()),
+		},
+		IMPORT_JOB: {
+			idFromName: (name: string) => name,
+			get: (id: string) => (opts.importJobs ?? {})[id],
 		},
 		EMAIL: {
 			async send(message: any) {

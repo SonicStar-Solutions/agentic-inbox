@@ -12,6 +12,7 @@ import {
 	PencilSimpleIcon,
 	PlusIcon,
 	TrashIcon,
+	TrayArrowDownIcon,
 	TrayIcon,
 } from "@phosphor-icons/react";
 import { useMemo, useState } from "react";
@@ -292,6 +293,15 @@ export default function Sidebar() {
 				)}
 
 				<LabelsSection mailboxId={mailboxId} onNavigate={handleNavClick} />
+
+				<div className="pt-5">
+					<FolderLink
+						to={`/mailbox/${mailboxId}/import`}
+						icon={<TrayArrowDownIcon size={18} weight="regular" />}
+						label="Import mail"
+						onClick={handleNavClick}
+					/>
+				</div>
 			</nav>
 
 			{/* Rename folder dialog */}

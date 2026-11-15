@@ -23,5 +23,8 @@ export const queryKeys = {
 		results: (mailboxId: string, query: string, page: number) =>
 			["search", mailboxId, query, page] as const,
 	},
+	imapImport: {
+		status: (mailboxId: string) => ["imapImport", mailboxId] as const,
+	},
 	config: ["config"] as const,
 };

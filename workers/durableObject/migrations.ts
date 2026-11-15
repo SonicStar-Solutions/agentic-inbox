@@ -205,4 +205,10 @@ export const mailboxMigrations: Migration[] = [
             CREATE INDEX IF NOT EXISTS idx_email_labels_label ON email_labels(label_id);
         `,
 	},
+	{
+		// Lookups by Message-ID (importing skips mail that is already here).
+		// Idempotent, so no transaction wrapper.
+		name: "11_message_id_index",
+		sql: `CREATE INDEX IF NOT EXISTS idx_emails_message_id ON emails(message_id);`,
+	},
 ];

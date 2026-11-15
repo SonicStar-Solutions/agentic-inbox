@@ -5,7 +5,7 @@
 import { Badge, Button, Input, Loader, useKumoToastManager } from "@cloudflare/kumo";
 import { RobotIcon, ArrowCounterClockwiseIcon } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
-import { useParams } from "react-router";
+import { Link, useParams } from "react-router";
 import { useMailbox, useUpdateMailbox } from "~/queries/mailboxes";
 
 // Placeholder shown in the textarea when no custom prompt is set.
@@ -268,6 +268,19 @@ export default function SettingsRoute() {
 						The prompt is sent as the system message to the AI model.
 						It controls the agent's personality, writing style, and behavior rules.
 					</p>
+				</div>
+
+				{/* Import */}
+				<div className="rounded-lg border border-kumo-line bg-kumo-base p-5">
+					<div className="text-sm font-medium text-kumo-default mb-1">Import mail</div>
+					<p className="text-xs text-kumo-subtle mb-3">
+						Moving from Gmail, iCloud, Fastmail or another provider? Copy your existing mail here over IMAP.
+					</p>
+					<Link to={`/mailbox/${mailboxId}/import`}>
+						<Button variant="secondary" size="sm" tabIndex={-1}>
+							Import from another provider
+						</Button>
+					</Link>
 				</div>
 
 				{/* Save */}

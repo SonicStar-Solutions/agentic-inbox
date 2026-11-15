@@ -112,6 +112,20 @@ A rejected send returns `502` with the provider error, and a rate-limited one re
 - **Send later:** scheduled messages are sent by a Durable Object alarm, so they go out even with the browser closed. They can't have attachments yet. Pending and failed items are on the Scheduled page.
 - **Undo send:** a sent message is held for 8 seconds in the browser. Closing the tab in that window cancels it (the tab asks first).
 
+### Importing mail from another provider
+
+Open a mailbox and choose **Import mail** in the sidebar (or Settings). Pick your old provider, enter your IMAP username and password, press **Connect**, review where each folder's mail should go, then **Start import**.
+
+- **Providers:** presets for Gmail / Google Workspace, iCloud, Yahoo, Fastmail, Purelymail and Zoho, or enter any IMAP server. Gmail, iCloud and Yahoo need an **app password**, not your normal password. Microsoft 365 and Outlook.com no longer allow password IMAP, so they can't be imported this way.
+- **It runs in the background.** A Durable Object copies the mail a few messages at a time, so you can close the tab. Progress, a time estimate and any failures are on the Import page; you can cancel at any time.
+- **Your old account is only read.** Nothing is deleted, moved or marked as read there.
+- **Safe to repeat.** Messages already in the mailbox (matched by `Message-ID`) are skipped, and a later import from the same account only copies new mail. Gmail's "All Mail" is imported last, so each message is stored once.
+- **Imported mail is history.** It keeps its original date, read and starred state, doesn't trigger the AI agent, and old replies without threading headers are grouped by subject only when they're within 30 days of the conversation and share a participant.
+- **Your password** is kept only while the import runs and is deleted when it stops (done, cancelled or failed). It is never returned by the API or logged. Failed messages are listed by folder and number only; **Retry failed** asks for the password again.
+- **Limits:** messages over 25 MB are skipped and listed as failures. The Worker only connects to ports 993 (TLS) and 143 (STARTTLS) on public host names; set the optional `IMPORT_ALLOWED_PORTS` variable (for example `"993,143,1993"`) to allow others.
+
+The same controls are in the HTTP API under `/api/v1/mailboxes/:mailboxId/import/imap/`: `POST test`, `POST start`, `GET status`, `POST cancel`, `POST retry-failed` and `POST dismiss-failures`.
+
 ### AI models
 
 Models are defined in `workers/lib/models.ts`. Override any of them with a Worker var (see the commented examples in `wrangler.jsonc`) without changing code:

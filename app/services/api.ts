@@ -2,6 +2,7 @@
 // Licensed under the Apache 2.0 license found in the LICENSE file or at:
 //     https://opensource.org/licenses/Apache-2.0
 
+import type { FolderTarget, ImapImportStatus, ImportSecurity, ProbeResult } from "shared/import";
 import type { Email, Folder, Mailbox } from "~/types";
 
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -183,6 +184,28 @@ const api = {
 	// Search
 	searchEmails: (mailboxId: string, params: Record<string, string>) =>
 		get<EmailListResponse | Email[]>(`/api/v1/mailboxes/${mailboxId}/search`, { params }),
+
+	// Import from another provider (IMAP)
+	probeImap: (mailboxId: string, conn: ImapConnection) =>
+		post<ProbeResult>(`/api/v1/mailboxes/${mailboxId}/import/imap/test`, conn),
+	startImapImport: (mailboxId: string, body: ImapConnection & { folderMap: Record<string, FolderTarget> }) =>
+		post<ImapImportStatus>(`/api/v1/mailboxes/${mailboxId}/import/imap/start`, body),
+	getImapImportStatus: (mailboxId: string) =>
+		get<ImapImportStatus>(`/api/v1/mailboxes/${mailboxId}/import/imap/status`),
+	cancelImapImport: (mailboxId: string) =>
+		post<ImapImportStatus>(`/api/v1/mailboxes/${mailboxId}/import/imap/cancel`),
+	retryFailedImport: (mailboxId: string, password: string) =>
+		post<ImapImportStatus>(`/api/v1/mailboxes/${mailboxId}/import/imap/retry-failed`, { password }),
+	dismissImportFailures: (mailboxId: string) =>
+		post<ImapImportStatus>(`/api/v1/mailboxes/${mailboxId}/import/imap/dismiss-failures`),
 };
+
+export interface ImapConnection {
+	host: string;
+	port: number;
+	security: ImportSecurity;
+	username: string;
+	password: string;
+}
 
 export default api;
