@@ -117,6 +117,12 @@ export function makeFakeEnv(opts: {
 			async put(key: string, value: unknown) {
 				objects.set(key, value);
 			},
+			async list(options: { prefix?: string } = {}) {
+				const keys = new Set([...mailboxes].map((m) => `mailboxes/${m}.json`));
+				for (const k of objects.keys()) keys.add(k);
+				const prefix = options.prefix ?? "";
+				return { objects: [...keys].filter((k) => k.startsWith(prefix)).map((key) => ({ key })), truncated: false };
+			},
 			async delete(keys: string | string[]) {
 				for (const k of [keys].flat()) objects.delete(k);
 			},
