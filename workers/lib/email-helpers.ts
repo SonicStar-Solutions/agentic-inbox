@@ -71,6 +71,12 @@ export function validateSender(
 	return { toStr, fromEmail, fromDomain };
 }
 
+/** The display name the user sent as, or null when they sent from a bare address. */
+export function senderNameOf(from: string | { email: string; name?: string | null }): string | null {
+	if (typeof from === "string") return null;
+	return from.name?.trim() || null;
+}
+
 export class SenderValidationError extends Error {
 	constructor(message: string) {
 		super(message);

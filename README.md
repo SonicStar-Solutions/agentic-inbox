@@ -112,6 +112,15 @@ A rejected send returns `502` with the provider error, and a rate-limited one re
 - **Send later:** scheduled messages are sent by a Durable Object alarm, so they go out even with the browser closed. They can't have attachments yet. Pending and failed items are on the Scheduled page.
 - **Undo send:** a sent message is held for 8 seconds in the browser. Closing the tab in that window cancels it (the tab asks first).
 
+### Auto-delete (retention)
+
+A daily cron (`triggers.crons` in `wrangler.jsonc`, 03:00 UTC) permanently deletes mail older than a retention period, in every folder except Drafts, along with its attachments. Scheduled sends are not touched.
+
+- **Default:** 30 days for every mailbox.
+- **Per domain:** `GET/PUT /api/v1/domains/:domain/settings` with `{ "retentionDays": 90 }`, stored in R2 at `domains/<domain>.json`.
+- **Per mailbox:** a `retentionDays` number in the mailbox settings. Leave it unset (or `null`) to follow the domain default.
+- **Keep forever:** `0`, at either level.
+
 ### Importing mail from another provider
 
 Open a mailbox and choose **Import mail** in the sidebar (or Settings). Pick your old provider, enter your IMAP username and password, press **Connect**, review where each folder's mail should go, then **Start import**.

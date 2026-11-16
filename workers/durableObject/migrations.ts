@@ -211,4 +211,12 @@ export const mailboxMigrations: Migration[] = [
 		name: "11_message_id_index",
 		sql: `CREATE INDEX IF NOT EXISTS idx_emails_message_id ON emails(message_id);`,
 	},
+	{
+		// The From display name and the Reply-To header, which used to be dropped on arrival.
+		name: "12_sender_name_and_reply_to",
+		sql: txn(`
+			ALTER TABLE emails ADD COLUMN sender_name TEXT;
+			ALTER TABLE emails ADD COLUMN reply_to TEXT;
+		`),
+	},
 ];

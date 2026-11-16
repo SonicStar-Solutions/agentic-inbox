@@ -12,7 +12,7 @@ import type { Env } from "../types";
 import { applyMigrations, mailboxMigrations } from "./migrations";
 import { splitLikeTerm } from "../lib/search";
 import { buildFtsQuery, FTS_SETUP_STATEMENTS } from "../lib/fts";
-import { buildReferencesChain, buildThreadingHeaders, generateMessageId, resolveOriginalEmail, validateSender } from "../lib/email-helpers";
+import { buildReferencesChain, buildThreadingHeaders, generateMessageId, resolveOriginalEmail, senderNameOf, validateSender } from "../lib/email-helpers";
 import { deliverRaw } from "../lib/send";
 import { aliasesOf } from "../lib/aliases";
 import { readMailboxSettings } from "../lib/mailbox-settings";
@@ -96,6 +96,8 @@ interface EmailData {
 	id: string;
 	subject: string;
 	sender: string;
+	sender_name?: string | null;
+	reply_to?: string | null;
 	recipient: string;
 	cc?: string | null;
 	bcc?: string | null;
@@ -246,6 +248,7 @@ export class MailboxDO extends DurableObject<Env> {
 				id: schema.emails.id,
 				subject: schema.emails.subject,
 				sender: schema.emails.sender,
+				sender_name: schema.emails.sender_name,
 				recipient: schema.emails.recipient,
 				cc: schema.emails.cc,
 				bcc: schema.emails.bcc,
@@ -365,7 +368,7 @@ export class MailboxDO extends DurableObject<Env> {
 					FROM folder_emails fe
 				)
 				SELECT
-					lp.id, lp.subject, lp.sender, lp.recipient, lp.date,
+					lp.id, lp.subject, lp.sender, lp.sender_name, lp.recipient, lp.date,
 					lp.read, lp.starred, lp.thread_id, lp.folder_id,
 					lp.in_reply_to, lp.email_references,
 					SUBSTR(lp.body, 1, 300) as snippet,
@@ -454,7 +457,7 @@ export class MailboxDO extends DurableObject<Env> {
 					ON fe.raw_thread_id = tc.raw_thread_id
 			)
 			SELECT
-				lif.id, lif.subject, lif.sender, lif.recipient, lif.date,
+				lif.id, lif.subject, lif.sender, lif.sender_name, lif.recipient, lif.date,
 				lif.read, lif.starred, lif.thread_id, lif.folder_id,
 				lif.in_reply_to, lif.email_references,
 				SUBSTR(lif.body, 1, 300) as snippet,
@@ -666,6 +669,27 @@ export class MailboxDO extends DurableObject<Env> {
 		return emailAttachments;
 	}
 
+	/**
+	 * Retention: permanently delete every message dated before [cutoffIso], in any folder except
+	 * Drafts (a draft is work in progress, not mail that has aged out). Returns how many went and
+	 * their attachment keys so the caller can remove the blobs from R2.
+	 */
+	async purgeOlderThan(cutoffIso: string): Promise<{ deleted: number; attachments: { email_id: string; id: string; filename: string }[] }> {
+		const sql = this.ctx.storage.sql;
+		const where = `date < ?1 AND folder_id != '${Folders.DRAFT}'`;
+		const attachments = [
+			...sql.exec(
+				`SELECT email_id, id, filename FROM attachments WHERE email_id IN (SELECT id FROM emails WHERE ${where})`,
+				cutoffIso,
+			),
+		] as unknown as { email_id: string; id: string; filename: string }[];
+		const deleted = Number(([...sql.exec(`SELECT COUNT(*) AS n FROM emails WHERE ${where}`, cutoffIso)][0] as { n: number }).n);
+		if (deleted === 0) return { deleted: 0, attachments: [] };
+		sql.exec(`DELETE FROM emails WHERE ${where}`, cutoffIso);
+		this.#notify("emails");
+		return { deleted, attachments };
+	}
+
 	async getAttachment(id: string) {
 		return (
 			this.db
@@ -855,7 +879,7 @@ export class MailboxDO extends DurableObject<Env> {
 		const query = options.group_by_thread
 			? `
 			SELECT * FROM (
-				SELECT e.id, e.subject, e.sender, e.recipient, e.cc, e.bcc, e.date,
+				SELECT e.id, e.subject, e.sender, e.sender_name, e.recipient, e.cc, e.bcc, e.date,
 					e.read, e.starred, e.in_reply_to, e.email_references,
 					e.thread_id, e.folder_id,
 					SUBSTR(e.body, 1, 300) as snippet,
@@ -868,7 +892,7 @@ export class MailboxDO extends DurableObject<Env> {
 			) WHERE rn = 1${keyset ? ` AND ${keyset}` : ""}
 			ORDER BY date DESC, id DESC LIMIT ?${params.length + 1} OFFSET ?${params.length + 2}`
 			: `
-			SELECT e.id, e.subject, e.sender, e.recipient, e.cc, e.bcc, e.date,
+			SELECT e.id, e.subject, e.sender, e.sender_name, e.recipient, e.cc, e.bcc, e.date,
 				e.read, e.starred, e.in_reply_to, e.email_references,
 				e.thread_id, e.folder_id,
 				SUBSTR(e.body, 1, 300) as snippet,
@@ -1098,6 +1122,7 @@ export class MailboxDO extends DurableObject<Env> {
 				id: messageId,
 				subject,
 				sender: fromEmail,
+				sender_name: senderNameOf(from),
 				recipient: toStr,
 				cc: cc ? join(cc)!.toLowerCase() : null,
 				bcc: bcc ? join(bcc)!.toLowerCase() : null,
@@ -1242,7 +1267,7 @@ export class MailboxDO extends DurableObject<Env> {
 		const offset = (Math.max(page, 1) - 1) * size;
 		const emails = [
 			...sql.exec(
-				`SELECT e.id, e.subject, e.sender, e.recipient, e.cc, e.bcc, e.date, e.read, e.starred,
+				`SELECT e.id, e.subject, e.sender, e.sender_name, e.recipient, e.cc, e.bcc, e.date, e.read, e.starred,
 				        e.in_reply_to, e.email_references, e.thread_id, e.folder_id, SUBSTR(e.body, 1, 300) AS snippet
 				 FROM emails e JOIN email_labels el ON el.email_id = e.id
 				 WHERE el.label_id = ? AND e.folder_id != 'trash'
@@ -1451,6 +1476,8 @@ export class MailboxDO extends DurableObject<Env> {
 				folder_id: folderId,
 				subject: email.subject,
 				sender: email.sender,
+				sender_name: email.sender_name ?? null,
+				reply_to: email.reply_to ?? null,
 				recipient: email.recipient,
 				cc: email.cc ?? null,
 				bcc: email.bcc ?? null,

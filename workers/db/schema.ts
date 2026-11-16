@@ -17,6 +17,10 @@ export const emails = sqliteTable("emails", {
 		.references(() => folders.id, { onDelete: "cascade" }),
 	subject: text("subject"),
 	sender: text("sender"),
+	/** The From display name, kept apart from `sender` (always the bare address). */
+	sender_name: text("sender_name"),
+	/** The Reply-To header as received, e.g. `Support <help@example.net>`. */
+	reply_to: text("reply_to"),
 	recipient: text("recipient"),
 	cc: text("cc"),
 	bcc: text("bcc"),
