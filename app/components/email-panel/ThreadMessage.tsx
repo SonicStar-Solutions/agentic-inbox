@@ -2,7 +2,9 @@
 // Licensed under the Apache 2.0 license found in the LICENSE file or at:
 //     https://opensource.org/licenses/Apache-2.0
 
-import { Badge, Button, Tooltip } from "@cloudflare/kumo";
+import { Button, Tooltip } from "@cloudflare/kumo";
+import InitialsAvatar from "~/components/airmail/InitialsAvatar";
+import { displayName } from "~/lib/avatar";
 import {
 	CaretDownIcon,
 	CaretUpIcon,
@@ -36,18 +38,11 @@ interface ThreadMessageProps {
 	onPreviewImage?: (url: string, filename: string) => void;
 }
 
-function Avatar({ isDraft, isSelf, sender }: { isDraft?: boolean; isSelf: boolean; sender: string }) {
+function Avatar({ isDraft, sender }: { isDraft?: boolean; isSelf: boolean; sender: string }) {
+	if (!isDraft) return <InitialsAvatar name={displayName(sender)} />;
 	return (
-		<div
-			className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
-				isDraft
-					? "bg-kumo-fill text-kumo-subtle"
-					: isSelf
-						? "bg-kumo-brand text-kumo-inverse"
-						: "bg-kumo-fill text-kumo-default"
-			}`}
-		>
-			{isDraft ? "D" : sender.charAt(0).toUpperCase()}
+		<div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-airmail-tertiary-container text-[15px] font-semibold text-airmail-on-tertiary-container">
+			D
 		</div>
 	);
 }
@@ -56,7 +51,6 @@ export default function ThreadMessage({
 	email,
 	mailboxId,
 	mailboxEmail,
-	isLast,
 	isDraft,
 	isSending,
 	isExpanded,
@@ -68,8 +62,8 @@ export default function ThreadMessage({
 	onPreviewImage,
 }: ThreadMessageProps) {
 	const isSelf = email.sender === mailboxEmail;
-	const containerClassName = `${!isLast ? "border-b border-kumo-line" : ""} ${isDraft ? "border-l-2 border-l-kumo-warning bg-kumo-warning/[0.02]" : ""}`;
-	const senderLabel = isDraft ? "Draft reply" : isSelf ? "You" : email.sender;
+	const containerClassName = `mx-4 my-2 overflow-hidden rounded-xl bg-airmail-container-low ${isDraft ? "border-l-4 border-l-kumo-warning" : ""}`;
+	const senderLabel = isDraft ? "Draft reply" : isSelf ? "You" : email.sender_name?.trim() || displayName(email.sender) || email.sender;
 
 	if (!isExpanded) {
 		return (
@@ -77,12 +71,12 @@ export default function ThreadMessage({
 				<button
 					type="button"
 					onClick={onToggleExpand}
-					className="w-full flex items-center gap-3 px-4 py-3 hover:bg-kumo-tint rounded-lg text-left"
+					className="w-full flex items-center gap-4 px-4 py-3 hover:bg-kumo-tint text-left"
 				>
-					<Avatar isDraft={isDraft} isSelf={isSelf} sender={email.sender} />
+					<Avatar isDraft={isDraft} isSelf={isSelf} sender={email.sender_name?.trim() || email.sender} />
 					<div className="flex-1 min-w-0">
 						<div className="flex items-center justify-between">
-							<span className="text-sm font-medium text-kumo-default truncate">
+							<span className="text-sm font-semibold text-kumo-default truncate">
 								{senderLabel}
 							</span>
 							<span className="text-xs text-kumo-subtle shrink-0">
@@ -101,9 +95,9 @@ export default function ThreadMessage({
 
 	return (
 		<div className={`group/thread-msg ${containerClassName}`}>
-			<div className="px-4 py-4 md:px-6">
+			<div className="p-4">
 				<div className="flex items-center justify-between gap-3 mb-3">
-					<div className="flex items-center gap-2.5 min-w-0">
+					<div className="flex items-center gap-4 min-w-0">
 						<button
 							type="button"
 							onClick={onToggleExpand}
@@ -116,10 +110,14 @@ export default function ThreadMessage({
 						</button>
 						<div className="min-w-0">
 							<div className="flex items-center gap-2">
-								<span className="text-sm font-medium text-kumo-default truncate">
+								<span className="text-sm font-semibold text-kumo-default truncate">
 									{senderLabel}
 								</span>
-								{isDraft && <Badge variant="outline">Draft</Badge>}
+								{isDraft && (
+									<span className="rounded-lg bg-airmail-tertiary-container px-2 py-0.5 text-xs font-semibold text-airmail-on-tertiary-container">
+										Draft
+									</span>
+								)}
 							</div>
 							<div className="text-xs text-kumo-subtle">To: {email.recipient}</div>
 						</div>
@@ -155,12 +153,12 @@ export default function ThreadMessage({
 					</div>
 				</div>
 
-				<div className="md:ml-[42px]">
+				<div className="md:ml-14">
 					<MessageBody email={email} mailboxId={mailboxId || ""} autoSize />
 				</div>
 
 				{isDraft && (onSendDraft || onEditDraft || onDeleteDraft) && (
-					<div className="flex gap-2 mt-3 md:ml-[42px]">
+					<div className="flex gap-2 mt-3 md:ml-14">
 						{onSendDraft && (
 							<Button
 								variant="primary"
@@ -203,7 +201,7 @@ export default function ThreadMessage({
 					emailId={email.id}
 					attachments={email.attachments}
 					onPreviewImage={onPreviewImage}
-					className="mt-3 md:ml-[42px]"
+					className="mt-3 md:ml-14"
 				/>
 			</div>
 		</div>

@@ -3,9 +3,11 @@
 //     https://opensource.org/licenses/Apache-2.0
 
 import { useKumoToastManager } from "@cloudflare/kumo";
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router";
 import { Folders } from "shared/folders";
+import DayHeader from "~/components/airmail/DayHeader";
+import { dayLabel } from "~/lib/day-groups";
 import EmailPanelDialogs from "~/components/email-panel/EmailPanelDialogs";
 import EmailPanelHeader from "~/components/email-panel/EmailPanelHeader";
 import EmailPanelToolbar from "~/components/email-panel/EmailPanelToolbar";
@@ -185,9 +187,13 @@ export default function EmailPanel({ emailId }: { emailId: string }) {
 				{hasThread ? (
 					allMessages.map((msg, idx) => {
 						const isDraft = draftMessageIds.has(msg.id);
+						const day = new Date(msg.date);
+						const prevDay = idx > 0 ? new Date(allMessages[idx - 1].date) : null;
+						const newDay = Number.isNaN(day.getTime()) ? false : !prevDay || day.toDateString() !== prevDay.toDateString();
 						return (
+							<Fragment key={msg.id}>
+							{newDay && <DayHeader date={day} label={dayLabel(day, new Date())} sticky={false} />}
 							<ThreadMessage
-								key={msg.id}
 								email={msg}
 								mailboxId={mailboxId}
 								mailboxEmail={currentMailbox?.email}
@@ -204,6 +210,7 @@ export default function EmailPanel({ emailId }: { emailId: string }) {
 									setPreviewImage({ url, filename })
 								}
 							/>
+							</Fragment>
 						);
 					})
 				) : (

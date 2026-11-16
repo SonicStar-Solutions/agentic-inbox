@@ -2,7 +2,8 @@
 // Licensed under the Apache 2.0 license found in the LICENSE file or at:
 //     https://opensource.org/licenses/Apache-2.0
 
-import { Badge, Button, Dialog, Input, Tooltip } from "@cloudflare/kumo";
+import { Button, Dialog, Input, Tooltip } from "@cloudflare/kumo";
+import InitialsAvatar from "~/components/airmail/InitialsAvatar";
 import {
 	ArchiveIcon,
 	CaretLeftIcon,
@@ -62,17 +63,17 @@ function FolderLink({
 			to={to}
 			onClick={onClick}
 			className={({ isActive }) =>
-				`flex items-center gap-3 py-2 px-3 rounded-md text-sm transition-colors ${
+				`flex items-center gap-3 h-11 px-4 rounded-full text-sm font-semibold transition-colors ${
 					isActive
-						? "bg-kumo-fill font-semibold text-kumo-default"
-						: "text-kumo-strong hover:bg-kumo-tint"
+						? "bg-airmail-secondary-container text-airmail-on-secondary-container"
+						: "text-kumo-subtle hover:bg-kumo-tint"
 				}`
 			}
 		>
 			<span className="shrink-0">{icon}</span>
 			<span className="truncate flex-1">{label}</span>
 			{unreadCount != null && unreadCount > 0 && (
-				<Badge variant="secondary">{unreadCount}</Badge>
+				<span className="text-xs font-normal">{unreadCount > 99 ? "99+" : unreadCount}</span>
 			)}
 		</NavLink>
 	);
@@ -175,12 +176,15 @@ export default function Sidebar() {
 					<CaretLeftIcon size={14} />
 					<span>Mailboxes</span>
 				</button>
-				<div className="px-1">
-					<div className="text-base font-semibold text-kumo-default truncate">
-						{displayName}
-					</div>
-					<div className="text-sm text-kumo-subtle truncate mt-0.5">
-						{currentMailbox?.email || mailboxId}
+				<div className="flex items-center gap-3 px-1">
+					<InitialsAvatar name={displayName} />
+					<div className="min-w-0">
+						<div className="text-base font-semibold text-kumo-default truncate">
+							{displayName}
+						</div>
+						<div className="text-xs text-kumo-subtle truncate">
+							{currentMailbox?.email || mailboxId}
+						</div>
 					</div>
 				</div>
 			</div>

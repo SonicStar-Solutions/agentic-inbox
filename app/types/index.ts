@@ -24,6 +24,8 @@ export interface Mailbox {
 	id: string;
 	email: string;
 	name: string;
+	/** From name; the mailbox list returns it flat, the detail endpoint nests it in settings. */
+	fromName?: string;
 	settings?: MailboxSettings;
 }
 
@@ -41,6 +43,8 @@ export interface Email {
 	folder_id?: string | null;
 	subject: string;
 	sender: string;
+	/** Display name from the From header, when the message had one. */
+	sender_name?: string | null;
 	recipient: string;
 	cc?: string;
 	bcc?: string;

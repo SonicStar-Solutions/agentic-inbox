@@ -15,6 +15,9 @@ import { EnvelopeIcon, PlusIcon, TrashIcon } from "@phosphor-icons/react";
 import { useQuery } from "@tanstack/react-query";
 import { type FormEvent, useEffect, useRef, useState } from "react";
 import { Link as RouterLink } from "react-router";
+import AirmailBand from "~/components/airmail/AirmailBand";
+import InitialsAvatar from "~/components/airmail/InitialsAvatar";
+import { groupByDomain, mailboxDisplayName } from "~/lib/mailbox-groups";
 import api from "~/services/api";
 import {
 	useCreateMailbox,
@@ -134,87 +137,69 @@ export default function HomeRoute() {
 				email: addr,
 				name: addr.split("@")[0] || addr,
 			}))
-		: mailboxes;
+		: mailboxes.map((m) => ({ id: m.id, email: m.email, name: mailboxDisplayName(m) }));
+	const groups = groupByDomain(accounts, domains);
 
 	const isLoading = !configData;
 
 	return (
-		<div className="min-h-screen bg-kumo-recessed">
-			<div className="mx-auto max-w-2xl px-4 py-8 md:px-6 md:py-16">
-				<div className="mb-8">
-					<div className="flex items-center justify-between">
-						<h1 className="text-2xl font-bold text-kumo-default">Mailboxes</h1>
-						{!isConfigured && (
-							<Button
-								variant="primary"
-								icon={<PlusIcon size={16} />}
-								onClick={() => setIsCreateOpen(true)}
-							>
-								New Mailbox
-							</Button>
-						)}
-					</div>
-					{domains.length > 0 && (
-						<p className="text-sm text-kumo-subtle mt-1">
-							{domains.join(", ")}
-						</p>
-					)}
-				</div>
+		<div className="min-h-screen bg-kumo-base">
+			{/* The band opens the app the way it tops an envelope. */}
+			<AirmailBand />
+			<div className="mx-auto max-w-[840px] px-4 pb-32 pt-6 md:px-6 md:pt-10">
+				<h1 className="mb-2 px-4 text-[22px] font-semibold leading-7 text-kumo-brand">Mailboxes</h1>
 
 				{isLoading ? (
 					<div className="flex justify-center py-20">
 						<Loader size="lg" />
 					</div>
-				) : accounts.length > 0 ? (
-					<div className="rounded-xl border border-kumo-line bg-kumo-base overflow-hidden">
-						{accounts.map((account, idx) => (
-							<RouterLink
-								key={account.id}
-								to={`/mailbox/${account.id}`}
-								className={`group flex items-center gap-4 px-5 py-4 no-underline transition-colors hover:bg-kumo-tint ${
-									idx > 0 ? "border-t border-kumo-line" : ""
-								}`}
-							>
-								<div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-kumo-fill text-sm font-bold text-kumo-default">
-									{account.name.charAt(0).toUpperCase()}
-								</div>
-								<div className="min-w-0 flex-1">
-									<div className="text-sm font-medium text-kumo-default truncate">
-										{account.name}
+				) : groups.length > 0 ? (
+					groups.map((group) => (
+						<section key={group.domain} aria-labelledby={`domain-${group.domain}`}>
+							<h2 id={`domain-${group.domain}`} className="px-4 pb-1 pt-5 text-xs font-semibold text-kumo-subtle">
+								{group.domain}
+							</h2>
+							{group.items.map((account) => (
+								<RouterLink
+									key={account.id}
+									to={`/mailbox/${account.id}`}
+									className="group relative flex items-center gap-4 px-4 py-3 text-kumo-default no-underline transition-colors after:absolute after:bottom-0 after:left-[72px] after:right-0 after:h-px after:bg-kumo-line hover:bg-kumo-tint"
+								>
+									<InitialsAvatar name={account.name} />
+									<div className="min-w-0 flex-1">
+										<div className="truncate text-base font-semibold leading-6">{account.name}</div>
+										<div className="truncate text-xs text-kumo-subtle">{account.email}</div>
 									</div>
-									<div className="text-sm text-kumo-subtle">
-										{account.email}
-									</div>
-								</div>
-								{!isConfigured && (
-									<Button
-										variant="ghost"
-										size="sm"
-										shape="square"
-										icon={<TrashIcon size={16} />}
-										aria-label={`Delete mailbox ${account.email}`}
-										onClick={(e) => {
-											e.preventDefault();
-											e.stopPropagation();
-											setMailboxToDelete({
-												id: account.id,
-												email: account.email,
-											});
-											setIsDeleteOpen(true);
-										}}
-									/>
-								)}
-							</RouterLink>
-						))}
-					</div>
+									{!isConfigured && (
+										<Button
+											variant="ghost"
+											size="sm"
+											shape="square"
+											icon={<TrashIcon size={16} />}
+											aria-label={`Delete mailbox ${account.email}`}
+											onClick={(e) => {
+												e.preventDefault();
+												e.stopPropagation();
+												setMailboxToDelete({
+													id: account.id,
+													email: account.email,
+												});
+												setIsDeleteOpen(true);
+											}}
+										/>
+									)}
+								</RouterLink>
+							))}
+						</section>
+					))
 				) : (
-					<div className="rounded-xl border border-kumo-line bg-kumo-base py-16 px-6">
+					<div className="px-6 py-16">
 						<div className="flex flex-col items-center text-center">
 							<div className="mb-4">
 								<EnvelopeIcon
 									size={48}
 									weight="thin"
-									className="text-kumo-subtle"
+									className="text-airmail-outline-variant"
 								/>
 							</div>
 							<h3 className="text-base font-semibold text-kumo-default mb-1.5">
@@ -225,19 +210,22 @@ export default function HomeRoute() {
 									? "Your email routing is configured but no mailboxes have been created yet. They will appear here automatically."
 									: "Create a mailbox to start sending and receiving emails with your domain."}
 							</p>
-							{!isConfigured && (
-								<Button
-									variant="primary"
-									icon={<PlusIcon size={16} />}
-									onClick={() => setIsCreateOpen(true)}
-								>
-									Create Mailbox
-								</Button>
-							)}
 						</div>
 					</div>
 				)}
 			</div>
+
+			{/* One labelled primary action per screen. */}
+			{!isConfigured && (
+				<button
+					type="button"
+					onClick={() => setIsCreateOpen(true)}
+					className="fixed bottom-6 right-6 z-10 flex h-14 cursor-pointer items-center gap-3 rounded-2xl border-0 bg-kumo-brand pl-4 pr-5 text-sm font-semibold text-kumo-inverse shadow-lg transition-colors hover:bg-kumo-brand-hover"
+				>
+					<PlusIcon size={20} />
+					New mailbox
+				</button>
+			)}
 
 			{/* Create Dialog */}
 			<Dialog.Root open={isCreateOpen} onOpenChange={setIsCreateOpen}>

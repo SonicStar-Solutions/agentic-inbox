@@ -4,9 +4,11 @@
 
 import { Button } from "@cloudflare/kumo";
 import { XIcon } from "@phosphor-icons/react";
+import { useIsFetching, useIsMutating } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
-import { Outlet, useParams } from "react-router";
+import { Outlet, useLocation, useParams } from "react-router";
 import AgentSidebar from "~/components/AgentSidebar";
+import AirmailBand from "~/components/airmail/AirmailBand";
 import ShortcutsDialog from "~/components/ShortcutsDialog";
 import UndoSendBar from "~/components/UndoSendBar";
 import { useGlobalShortcuts } from "~/hooks/useGlobalShortcuts";
@@ -32,6 +34,10 @@ export default function MailboxRoute() {
 
 	useGlobalShortcuts();
 	useLiveUpdates(mailboxId);
+
+	const { pathname } = useLocation();
+	const showBand = !/\/(settings|import)$/.test(pathname);
+	const isBusy = useIsFetching() + useIsMutating() > 0;
 
 	useEffect(() => {
 		if (
@@ -72,6 +78,8 @@ export default function MailboxRoute() {
 			{/* Main content */}
 			<div className="flex-1 flex flex-col min-w-0 bg-kumo-base">
 				<Header />
+				{/* The band is the app's progress line: it slides while anything is in flight. Not on settings or import. */}
+				{showBand && <AirmailBand active={isBusy} />}
 				<main className="flex-1 overflow-hidden">
 					<Outlet />
 				</main>
