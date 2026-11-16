@@ -6,13 +6,13 @@
  * Auto-delete ("retention"): mail older than N days is permanently removed by a daily cron.
  *
  * N is resolved per mailbox: the mailbox's own `retentionDays` setting wins, else the domain's
- * default (R2 `domains/<domain>.json`), else {@link DEFAULT_RETENTION_DAYS}. 0 means keep forever.
+ * default (R2 `domains/<domain>.json`), else {@link DEFAULT_RETENTION_DAYS} (0: keep forever, so nothing is deleted until someone opts in).
  */
 import { listMailboxes } from "./email-helpers";
 import { readMailboxSettings, type MailboxSettingsBlob } from "./mailbox-settings";
 import type { Env } from "../types";
 
-export const DEFAULT_RETENTION_DAYS = 30;
+export const DEFAULT_RETENTION_DAYS = 0;
 export const MAX_RETENTION_DAYS = 3650;
 
 export type DomainSettingsBlob = Record<string, unknown>;

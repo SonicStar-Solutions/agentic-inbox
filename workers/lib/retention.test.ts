@@ -14,10 +14,10 @@ import {
 } from "./retention";
 
 describe("resolveRetentionDays", () => {
-	it("falls back to 30 days when neither the mailbox nor the domain says anything", () => {
-		expect(DEFAULT_RETENTION_DAYS).toBe(30);
-		expect(resolveRetentionDays({}, {})).toBe(30);
-		expect(resolveRetentionDays(undefined, undefined)).toBe(30);
+	it("keeps mail forever when neither the mailbox nor the domain says anything", () => {
+		expect(DEFAULT_RETENTION_DAYS).toBe(0);
+		expect(resolveRetentionDays({}, {})).toBe(0);
+		expect(resolveRetentionDays(undefined, undefined)).toBe(0);
 	});
 
 	it("uses the domain default when the mailbox has no setting", () => {
@@ -38,7 +38,7 @@ describe("resolveRetentionDays", () => {
 		expect(resolveRetentionDays({ retentionDays: -3 }, { retentionDays: 90 })).toBe(90);
 		expect(resolveRetentionDays({ retentionDays: "7" }, { retentionDays: 90 })).toBe(90);
 		expect(resolveRetentionDays({ retentionDays: 2.5 }, { retentionDays: 90 })).toBe(90);
-		expect(resolveRetentionDays({}, { retentionDays: "x" })).toBe(30);
+		expect(resolveRetentionDays({}, { retentionDays: "x" })).toBe(0);
 	});
 });
 
@@ -93,18 +93,19 @@ describe("runRetention", () => {
 		const { env, objects } = makeFakeEnv({ mailboxes: ["a@example.com", "b@example.com", "c@other.org"] });
 		objects.set("domains/example.com.json", { retentionDays: 90 });
 		objects.set("mailboxes/a@example.com.json", { retentionDays: 7 });
-		// b inherits the domain's 90; c's domain has no setting so it gets the 30-day default.
+		// b inherits the domain's 90; c's domain has no setting so it keeps mail (the default is never).
 
 		const summary = await runRetention(env, now);
 
 		expect(env.MAILBOX.get("a@example.com").purges).toEqual(["2026-11-08T12:00:00.000Z"]);
 		expect(env.MAILBOX.get("b@example.com").purges).toEqual(["2026-08-17T12:00:00.000Z"]);
-		expect(env.MAILBOX.get("c@other.org").purges).toEqual(["2026-10-16T12:00:00.000Z"]);
+		expect(env.MAILBOX.get("c@other.org").purges).toEqual([]);
 		expect(summary.mailboxes).toBe(3);
 	});
 
 	it("skips a mailbox that keeps mail forever", async () => {
 		const { env, objects } = makeFakeEnv({ mailboxes: ["a@example.com"] });
+		objects.set("domains/example.com.json", { retentionDays: 30 });
 		objects.set("mailboxes/a@example.com.json", { retentionDays: 0 });
 
 		await runRetention(env, now);
@@ -114,6 +115,7 @@ describe("runRetention", () => {
 
 	it("removes the purged messages' attachment blobs from R2 and reports the count", async () => {
 		const { env, objects } = makeFakeEnv({ mailboxes: ["a@example.com"] });
+		objects.set("domains/example.com.json", { retentionDays: 30 });
 		env.MAILBOX.get("a@example.com").purgeResult = {
 			deleted: 2,
 			attachments: [{ email_id: "e1", id: "att1", filename: "x.pdf" }],
@@ -129,7 +131,8 @@ describe("runRetention", () => {
 	});
 
 	it("keeps going when one mailbox fails", async () => {
-		const { env } = makeFakeEnv({ mailboxes: ["a@example.com", "b@example.com"] });
+		const { env, objects } = makeFakeEnv({ mailboxes: ["a@example.com", "b@example.com"] });
+		objects.set("domains/example.com.json", { retentionDays: 30 });
 		env.MAILBOX.get("a@example.com").purgeError = new Error("boom");
 		env.MAILBOX.get("b@example.com").purgeResult = { deleted: 4, attachments: [] };
 

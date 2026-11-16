@@ -14,11 +14,11 @@ const put = (body: unknown): RequestInit => ({
 });
 
 describe("domain settings", () => {
-	it("reports the 30-day default when nothing is stored", async () => {
+	it("reports never (0) as the default when nothing is stored", async () => {
 		const { env } = makeFakeEnv();
 		const res = await req(env, "/api/v1/domains/example.com/settings");
 		expect(res.status).toBe(200);
-		expect(await res.json()).toEqual({ domain: "example.com", retentionDays: 30 });
+		expect(await res.json()).toEqual({ domain: "example.com", retentionDays: 0 });
 	});
 
 	it("saves and returns a domain default", async () => {

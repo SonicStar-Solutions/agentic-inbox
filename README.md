@@ -116,7 +116,7 @@ A rejected send returns `502` with the provider error, and a rate-limited one re
 
 A daily cron (`triggers.crons` in `wrangler.jsonc`, 03:00 UTC) permanently deletes mail older than a retention period, in every folder except Drafts, along with its attachments. Scheduled sends are not touched.
 
-- **Default:** 30 days for every mailbox.
+- **Default:** never (0): nothing is deleted until a domain or mailbox sets a retention.
 - **Per domain:** `GET/PUT /api/v1/domains/:domain/settings` with `{ "retentionDays": 90 }`, stored in R2 at `domains/<domain>.json`.
 - **Per mailbox:** a `retentionDays` number in the mailbox settings. Leave it unset (or `null`) to follow the domain default.
 - **Keep forever:** `0`, at either level.
