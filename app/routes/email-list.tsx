@@ -6,14 +6,11 @@
 import { Button, Pagination, Tooltip, useKumoToastManager } from "@cloudflare/kumo";
 import {
 	ArchiveIcon,
-	ArrowBendUpLeftIcon,
 	ArrowsClockwiseIcon,
-	EnvelopeOpenIcon,
 	EnvelopeSimpleIcon,
 	FileIcon,
 	PaperPlaneTiltIcon,
 	PencilSimpleIcon,
-	StarIcon,
 	TrashIcon,
 	TrayIcon,
 } from "@phosphor-icons/react";
@@ -21,14 +18,15 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router";
 import { Folders } from "shared/folders";
-import { formatListDate } from "shared/dates";
 import BulkToolbar from "~/components/BulkToolbar";
-import LabelChip from "~/components/LabelChip";
+import DayHeader from "~/components/airmail/DayHeader";
+import EmailRow, { hasUnread } from "~/components/EmailRow";
+import { groupByDay } from "~/lib/day-groups";
+import { useMailbox } from "~/queries/mailboxes";
 import { useLabels } from "~/queries/labels";
 import MailboxSplitView from "~/components/MailboxSplitView";
 import { buildBulkRequest, type BulkAction } from "~/lib/bulk";
 import { moveSelection, shouldHandleKey } from "~/lib/shortcuts";
-import { getSnippetText } from "~/lib/utils";
 import {
 	useBulkAction,
 	useDeleteEmail,
@@ -89,19 +87,17 @@ const FOLDER_EMPTY_STATES: Record<
 
 function EmailListSkeleton() {
 	return (
-		<div className="animate-pulse space-y-1 p-2">
+		<div className="animate-pulse" aria-hidden="true">
 			{Array.from({ length: 8 }).map((_, i) => (
-				<div key={i} className="flex items-center gap-3 px-3 py-3">
-					<div className="w-4 h-4 rounded bg-kumo-fill" />
-					<div className="w-5 h-5 rounded bg-kumo-fill" />
-					<div className="flex-1 space-y-2">
+				<div key={i} className="relative flex gap-4 px-4 py-3 after:absolute after:bottom-0 after:left-[72px] after:right-0 after:h-px after:bg-kumo-line">
+					<div className="h-10 w-10 shrink-0 rounded-full bg-kumo-fill" />
+					<div className="flex-1 space-y-2 pt-0.5">
 						<div className="flex items-center gap-2">
-							<div className="h-3 w-24 rounded bg-kumo-fill" />
-							<div className="h-3 w-4 rounded bg-kumo-fill" />
-							<div className="h-3 flex-1 rounded bg-kumo-fill" />
-							<div className="h-3 w-12 rounded bg-kumo-fill" />
+							<div className="h-3.5 w-28 rounded bg-kumo-fill" />
+							<div className="ml-auto h-3 w-10 rounded bg-kumo-fill" />
 						</div>
-						<div className="h-2.5 w-3/4 rounded bg-kumo-fill" />
+						<div className="h-3 w-3/4 rounded bg-kumo-fill" />
+						<div className="h-2.5 w-2/3 rounded bg-kumo-fill" />
 					</div>
 				</div>
 			))}
@@ -190,6 +186,8 @@ export default function EmailListRoute() {
 	const emails = emailData?.emails ?? [];
 	const totalCount = emailData?.totalCount ?? 0;
 
+	const { data: mailbox } = useMailbox(mailboxId);
+	const dayGroups = useMemo(() => groupByDay(emails, (e) => e.date), [emails]);
 	const { data: folders = [] } = useFolders(mailboxId);
 	const { data: labels = [] } = useLabels(mailboxId);
 
@@ -199,8 +197,6 @@ export default function EmailListRoute() {
 		if (found) return found.name;
 		return folder ? folder.charAt(0).toUpperCase() + folder.slice(1) : "Inbox";
 	}, [folders, labels, folder, labelId]);
-
-	const isPanelOpen = selectedEmailId !== null || isComposing;
 
 	// Selection only makes sense for the rows on screen: drop it on folder or
 	// page change, and prune rows that disappeared (moved, deleted, refetched).
@@ -322,28 +318,6 @@ export default function EmailListRoute() {
 		return () => document.removeEventListener("keydown", onKey);
 	});
 
-	const toggleStar = (e: React.MouseEvent, email: Email) => {
-		e.preventDefault();
-		e.stopPropagation();
-		if (mailboxId)
-			updateEmail.mutate({
-				mailboxId,
-				id: email.id,
-				data: { starred: !email.starred },
-			});
-	};
-
-	const handleDelete = (e: React.MouseEvent, emailId: string) => {
-		e.preventDefault();
-		e.stopPropagation();
-		if (mailboxId) {
-			const confirmed = window.confirm("Are you sure you want to delete this email?");
-			if (!confirmed) return;
-			deleteEmail.mutate({ mailboxId, id: emailId });
-			if (selectedEmailId === emailId) closePanel();
-		}
-	};
-
 	const handleRefresh = () => {
 		if (mailboxId) {
 			queryClient.invalidateQueries({ queryKey: ["emails", mailboxId] });
@@ -351,14 +325,6 @@ export default function EmailListRoute() {
 				queryKey: queryKeys.folders.list(mailboxId),
 			});
 		}
-	};
-
-	// Thread-aware helpers
-	const hasUnread = (email: Email): boolean => {
-		if (email.thread_unread_count !== undefined) {
-			return email.thread_unread_count > 0;
-		}
-		return !email.read;
 	};
 
 	const handleRowClick = (email: Email) => {
@@ -377,18 +343,6 @@ export default function EmailListRoute() {
 				});
 			}
 		}
-	};
-
-	const formatParticipants = (email: Email): string => {
-		if (email.participants) {
-			const names = email.participants
-				.split(",")
-				.map((p) => p.trim().split("@")[0])
-				.filter((name, idx, arr) => arr.indexOf(name) === idx);
-			if (names.length <= 3) return names.join(", ");
-			return `${names.slice(0, 2).join(", ")} +${names.length - 2}`;
-		}
-		return email.sender.split("@")[0];
 	};
 
 	return (
@@ -412,8 +366,8 @@ export default function EmailListRoute() {
 					/>
 				) : (
 
-				<div className="flex items-center justify-between px-4 py-3.5 border-b border-kumo-line shrink-0 md:px-5">
-					<h1 className="text-lg font-semibold text-kumo-default">
+				<div className="flex items-center justify-between px-4 py-3 border-b border-kumo-line shrink-0">
+					<h1 className="text-[22px] font-semibold leading-7 text-kumo-brand">
 						{folderName}
 					</h1>
 					<div className="flex items-center gap-1">
@@ -458,143 +412,36 @@ export default function EmailListRoute() {
 					</div>
 				) : emails.length > 0 ? (
 						<div>
-							{emails.map((email) => {
-								const isSelected = selectedEmailId === email.id;
-								const snippet = getSnippetText(email.snippet);
-								return (
-									<div
-										key={email.id}
-										data-email-id={email.id}
-										role="button"
-										tabIndex={0}
-										onClick={() => handleRowClick(email)}
-										onKeyDown={(e) => {
-											if (e.key === "Enter" || e.key === " ") {
-												e.preventDefault();
-												handleRowClick(email);
-											}
-										}}
-										className={`group flex items-center gap-3 w-full text-left cursor-pointer transition-colors border-b border-kumo-line px-4 py-2.5 md:px-6 md:py-3 ${
-											isPanelOpen ? "md:px-4 md:py-2.5" : ""
-										} ${isSelected ? "bg-kumo-tint" : "hover:bg-kumo-tint"}`}
-									>
-										{/* Select */}
-										<input
-											type="checkbox"
+							{dayGroups.map((group) => (
+								<section key={group.key} aria-label={group.label}>
+									<DayHeader date={group.date} label={group.label} unread={group.items.filter(hasUnread).length} />
+									{group.items.map((email) => (
+										<EmailRow
+											key={email.id}
+											email={email}
+											mailboxEmail={mailbox?.email ?? mailboxId}
+											underDayHeader
+											open={selectedEmailId === email.id}
 											checked={selected.has(email.id)}
-											onClick={(e) => e.stopPropagation()}
-											onChange={() => toggleSelected(email)}
-											aria-label={`Select conversation: ${email.subject}`}
-											className="h-4 w-4 shrink-0"
-										/>
-
-										{/* Unread dot */}
-										<div className="w-2.5 shrink-0 flex justify-center">
-											{hasUnread(email) && (
-												<div className="h-2 w-2 rounded-full bg-kumo-brand" />
-											)}
-										</div>
-
-										{/* Star */}
-										<button
-											type="button"
-											className="shrink-0 p-0.5 bg-transparent border-0 cursor-pointer"
-											onClick={(e) => {
-												e.stopPropagation();
-												toggleStar(e, email);
+											selectionMode={selected.size > 0}
+											onOpen={() => handleRowClick(email)}
+											onToggleChecked={() => toggleSelected(email)}
+											onToggleStar={() => {
+												if (mailboxId) updateEmail.mutate({ mailboxId, id: email.id, data: { starred: !email.starred } });
 											}}
-										>
-											<StarIcon
-												size={16}
-												weight={email.starred ? "fill" : "regular"}
-												className={
-													email.starred
-														? "text-kumo-warning"
-														: "text-kumo-subtle hover:text-kumo-warning"
-												}
-											/>
-										</button>
-
-										{/* Content */}
-										<div className="min-w-0 flex-1">
-											<div className="flex items-center gap-2">
-												<span
-													className={`truncate text-sm ${hasUnread(email) ? "font-semibold text-kumo-default" : "text-kumo-strong"}`}
-												>
-													{formatParticipants(email)}
-												</span>
-												{(email.thread_count ?? 1) > 1 && (
-													<span className="shrink-0 text-xs text-kumo-subtle bg-kumo-fill rounded-full px-1.5 py-0.5 font-medium">
-														{email.thread_count}
-													</span>
-												)}
-												{email.has_draft && (
-													<span className="shrink-0 text-xs text-kumo-destructive font-medium">
-														Draft
-													</span>
-												)}
-												{email.needs_reply && !email.has_draft && (
-													<Tooltip content="Needs reply" asChild>
-														<span className="shrink-0 text-kumo-warning">
-															<ArrowBendUpLeftIcon size={14} weight="bold" />
-														</span>
-													</Tooltip>
-												)}
-												{email.labels?.slice(0, 3).map((l) => (
-													<LabelChip key={l.id} label={l} />
-												))}
-												<span className="text-sm text-kumo-subtle shrink-0 ml-auto">
-													{formatListDate(email.date)}
-												</span>
-											</div>
-											<div className="truncate text-sm mt-0.5">
-												<span
-													className={hasUnread(email) ? "font-medium text-kumo-default" : "text-kumo-subtle"}
-												>
-													{email.subject}
-												</span>
-											{snippet && (
-												<span className="text-kumo-subtle font-normal">
-													{" "}&mdash; {snippet}
-												</span>
-											)}
-										</div>
-									</div>
-
-										{/* Hover actions */}
-										<div className="hidden group-hover:flex items-center shrink-0">
-											<Tooltip content={email.read ? "Mark unread" : "Mark read"} asChild>
-												<Button
-													variant="ghost"
-													shape="square"
-													size="sm"
-													icon={email.read ? <EnvelopeSimpleIcon size={14} /> : <EnvelopeOpenIcon size={14} />}
-													onClick={(e) => {
-														e.stopPropagation();
-														if (mailboxId)
-															updateEmail.mutate({
-																mailboxId,
-																id: email.id,
-																data: { read: !email.read },
-															});
-													}}
-													aria-label={email.read ? "Mark unread" : "Mark read"}
-												/>
-											</Tooltip>
-											<Tooltip content="Delete" asChild>
-												<Button
-													variant="ghost"
-													shape="square"
-													size="sm"
-													icon={<TrashIcon size={14} />}
-													onClick={(e) => handleDelete(e, email.id)}
-													aria-label="Delete"
-												/>
-											</Tooltip>
-										</div>
-									</div>
-								);
-							})}
+											onToggleRead={() => {
+												if (mailboxId) updateEmail.mutate({ mailboxId, id: email.id, data: { read: !email.read } });
+											}}
+											onDelete={() => {
+												if (!mailboxId) return;
+												if (!window.confirm("Are you sure you want to delete this email?")) return;
+												deleteEmail.mutate({ mailboxId, id: email.id });
+												if (selectedEmailId === email.id) closePanel();
+											}}
+										/>
+									))}
+								</section>
+							))}
 						</div>
 					) : (
 						<FolderEmptyState
