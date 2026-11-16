@@ -16,6 +16,7 @@ import {
 	generateMessageId,
 	buildThreadingHeaders,
 	listMailboxes,
+	senderNameOf,
 } from "./lib/email-helpers";
 import { SendEmailRequestSchema } from "./lib/schemas";
 import { parseJsonBody } from "./lib/http";
@@ -27,6 +28,7 @@ import { isAllowedDomain, parseDomains } from "./lib/domains";
 import { isAutoDraftEnabled, readMailboxSettings, validateAgentSettings } from "./lib/mailbox-settings";
 import { resolveReceivedDate } from "./lib/received-date";
 import { logRateLimitHit } from "./lib/rate-limit";
+import { readDomainSettings, resolveRetentionDays, validateRetentionDays } from "./lib/retention";
 import { findOverlongSearchTerm, MAX_SEARCH_TERM_LENGTH } from "./lib/search";
 import { handleReplyEmail, handleForwardEmail } from "./routes/reply-forward";
 import { handleDomainEmails, handleDomainSearch, handleDomainFolders } from "./routes/domain-inbox";
@@ -69,6 +71,14 @@ function slugify(text: string) { // can return "" for non-alphanumeric input
 	return text.toString().toLowerCase()
 		.replace(/\s+/g, "-").replace(/[^\w-]+/g, "")
 		.replace(/--+/g, "-").replace(/^-+/, "").replace(/-+$/, "");
+}
+
+/** The Reply-To header as `Name <addr>, …`, or null when the message has none. */
+function formatReplyTo(replyTo: { name?: string; address?: string }[] | undefined): string | null {
+	const parts = (replyTo ?? [])
+		.filter((a) => a.address)
+		.map((a) => (a.name?.trim() ? `${a.name.trim()} <${a.address!.toLowerCase()}>` : a.address!.toLowerCase()));
+	return parts.length > 0 ? parts.join(", ") : null;
 }
 
 function intQuery(c: AppContext, key: string): number | undefined {
@@ -131,6 +141,26 @@ app.get("/api/v1/domains/:domain/emails", handleDomainEmails);
 app.get("/api/v1/domains/:domain/search", handleDomainSearch);
 app.get("/api/v1/domains/:domain/folders", handleDomainFolders);
 
+// -- Domain settings (defaults every mailbox on the domain inherits) -
+
+app.get("/api/v1/domains/:domain/settings", async (c) => {
+	const domain = c.req.param("domain")!.toLowerCase();
+	if (!parseDomains(c.env.DOMAINS).includes(domain)) return c.json({ error: "Not found" }, 404);
+	const settings = await readDomainSettings(c.env.BUCKET, domain);
+	return c.json({ domain, retentionDays: resolveRetentionDays(undefined, settings) });
+});
+
+app.put("/api/v1/domains/:domain/settings", async (c) => {
+	const domain = c.req.param("domain")!.toLowerCase();
+	if (!parseDomains(c.env.DOMAINS).includes(domain)) return c.json({ error: "Not found" }, 404);
+	const body = (await c.req.json().catch(() => ({}))) as { retentionDays?: unknown };
+	const error = validateRetentionDays(body.retentionDays);
+	if (error) return c.json({ error }, 400);
+	const stored = { ...(await readDomainSettings(c.env.BUCKET, domain)), retentionDays: body.retentionDays };
+	await c.env.BUCKET.put(`domains/${domain}.json`, JSON.stringify(stored));
+	return c.json({ domain, retentionDays: body.retentionDays as number });
+});
+
 app.post("/api/v1/mailboxes", async (c) => {
 	const parsed = await parseJsonBody(c, CreateMailboxBody);
 	if (!parsed.ok) return parsed.response;
@@ -166,7 +196,7 @@ app.put("/api/v1/mailboxes/:mailboxId", async (c) => {
 	const mailboxId = c.req.param("mailboxId")!;
 	const { settings } = (await c.req.json().catch(() => ({}))) as { settings?: Record<string, unknown> };
 	if (!settings || typeof settings !== "object") return c.json({ error: "settings object required" }, 400);
-	const settingsError = validateAgentSettings(settings);
+	const settingsError = validateAgentSettings(settings) ?? validateRetentionDays(settings.retentionDays, { allowNull: true });
 	if (settingsError) return c.json({ error: settingsError }, 400);
 	const key = `mailboxes/${mailboxId}.json`;
 	if (!(await c.env.BUCKET.head(key))) return c.json({ error: "Not found" }, 404);
@@ -264,7 +294,7 @@ app.post("/api/v1/mailboxes/:mailboxId/emails", async (c: AppContext) => {
 	try {
 		const attachmentData = await storeAttachments(c.env.BUCKET, messageId, attachments);
 		await stub.createEmail(Folders.SENT, {
-			id: messageId, subject, sender: fromEmail, recipient: toStr,
+			id: messageId, subject, sender: fromEmail, sender_name: senderNameOf(from), recipient: toStr,
 			cc: cc ? (Array.isArray(cc) ? cc.join(", ") : cc).toLowerCase() : null,
 			bcc: bcc ? (Array.isArray(bcc) ? bcc.join(", ") : bcc).toLowerCase() : null,
 			date: new Date().toISOString(), body: html || text || "",
@@ -617,6 +647,8 @@ async function receiveEmail(event: InboundEmailEvent, env: Env, ctx: ExecutionCo
 	await stub.createEmail(Folders.INBOX, {
 		id: messageId, subject: parsedEmail.subject || "",
 		sender: (parsedEmail.from?.address || "").toLowerCase(),
+		sender_name: parsedEmail.from?.name?.trim() || null,
+		reply_to: formatReplyTo(parsedEmail.replyTo),
 		// Header To: for context (e.g. the list address); the envelope recipient when absent.
 		recipient: (allRecipients.length > 0 ? allRecipients : [mailboxId]).join(", "),
 		cc: ccRecipients.join(", ") || null, bcc: bccRecipients.join(", ") || null,

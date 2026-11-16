@@ -12,6 +12,10 @@
 	"compatibility_flags": [
 		"nodejs_compat"
 	],
+	"triggers": {
+		// Daily at 03:00 UTC: auto-delete mail older than the retention set per mailbox or domain (default: never).
+		"crons": ["0 3 * * *"]
+	},
 	"vars": {
 		// Production deploys must also define POLICY_AUD and TEAM_DOMAIN.
 		// TEAM_DOMAIN may be the base Access URL or the full /cdn-cgi/access/certs URL.

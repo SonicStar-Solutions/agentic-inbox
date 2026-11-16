@@ -97,3 +97,27 @@ describe("compose: rejected sends are not reported as sent (#84)", () => {
 		expect(stub.rows.filter((r) => r.folder === "sent")).toHaveLength(0);
 	});
 });
+
+describe("compose: sender display name", () => {
+	it("files the sent message with the From name the user sent as", async () => {
+		const { env, stubs } = makeFakeEnv();
+		const { ctx } = fakeExecutionCtx();
+		const res = await app.request(
+			"/api/v1/mailboxes/alice@example.com/emails",
+			jsonPost({ ...compose, from: { email: "alice@example.com", name: "Alice Chen" } }),
+			env,
+			ctx,
+		);
+
+		expect(res.status).toBe(202);
+		expect(stubs["alice@example.com"].rows[0].email.sender_name).toBe("Alice Chen");
+	});
+
+	it("stores no name when sending from a bare address", async () => {
+		const { env, stubs } = makeFakeEnv();
+		const { ctx } = fakeExecutionCtx();
+		await app.request("/api/v1/mailboxes/alice@example.com/emails", jsonPost(compose), env, ctx);
+
+		expect(stubs["alice@example.com"].rows[0].email.sender_name ?? null).toBeNull();
+	});
+});

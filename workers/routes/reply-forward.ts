@@ -14,6 +14,7 @@ import {
 	buildReferencesChain,
 	buildThreadingHeaders,
 	resolveOriginalEmail,
+	senderNameOf,
 } from "../lib/email-helpers";
 import { SendEmailRequestSchema } from "../lib/schemas";
 import { parseJsonBody } from "../lib/http";
@@ -97,6 +98,7 @@ export async function handleReplyEmail(c: AppContext) {
 				id: messageId,
 				subject,
 				sender: fromEmail,
+				sender_name: senderNameOf(from),
 				recipient: toStr,
 				cc: cc ? (Array.isArray(cc) ? cc.join(", ") : cc).toLowerCase() : null,
 				bcc: bcc ? (Array.isArray(bcc) ? bcc.join(", ") : bcc).toLowerCase() : null,
@@ -199,6 +201,7 @@ export async function handleForwardEmail(c: AppContext) {
 				id: messageId,
 				subject,
 				sender: fromEmail,
+				sender_name: senderNameOf(from),
 				recipient: toStr,
 				cc: cc ? (Array.isArray(cc) ? cc.join(", ") : cc).toLowerCase() : null,
 				bcc: bcc ? (Array.isArray(bcc) ? bcc.join(", ") : bcc).toLowerCase() : null,

@@ -21,6 +21,15 @@ export function makeFakeMailboxStub() {
 		rows,
 		calls,
 		rateLimit: null as string | null,
+		/** Cutoffs [purgeOlderThan] was called with, oldest call first. */
+		purges: [] as string[],
+		purgeResult: { deleted: 0, attachments: [] as { email_id: string; id: string; filename: string }[] },
+		purgeError: null as Error | null,
+		async purgeOlderThan(cutoffIso: string) {
+			stub.purges.push(cutoffIso);
+			if (stub.purgeError) throw stub.purgeError;
+			return stub.purgeResult;
+		},
 		async checkSendRateLimit() {
 			calls.push("checkSendRateLimit");
 			return stub.rateLimit;

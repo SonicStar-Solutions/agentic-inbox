@@ -163,3 +163,34 @@ describe("inbound replies join the stored parent's thread (#85)", () => {
 		expect(stub.rows[0].email.thread_id).toBe("existing-thread");
 	});
 });
+
+describe("sender name and Reply-To", () => {
+	it("keeps the From display name and the Reply-To address alongside the plain sender address", async () => {
+		const { env, stubs } = makeFakeEnv();
+		const { ctx } = fakeExecutionCtx();
+		const raw = rfc822({
+			From: '"Dave Lee" <Dave@Example.net>',
+			"Reply-To": "Support Desk <help@example.net>",
+			To: "alice@example.com",
+			Subject: "Hello",
+			"Message-ID": "<n1@example.net>",
+		});
+		await receiveEmail(rawEmailEvent(raw, "alice@example.com") as any, env, ctx);
+
+		const stored = stubs["alice@example.com"].rows[0].email;
+		expect(stored.sender).toBe("dave@example.net");
+		expect(stored.sender_name).toBe("Dave Lee");
+		expect(stored.reply_to).toBe("Support Desk <help@example.net>");
+	});
+
+	it("stores nothing for a name or Reply-To the message does not have", async () => {
+		const { env, stubs } = makeFakeEnv();
+		const { ctx } = fakeExecutionCtx();
+		const raw = rfc822({ From: "dave@example.net", To: "alice@example.com", Subject: "Hi", "Message-ID": "<n2@example.net>" });
+		await receiveEmail(rawEmailEvent(raw, "alice@example.com") as any, env, ctx);
+
+		const stored = stubs["alice@example.com"].rows[0].email;
+		expect(stored.sender_name ?? null).toBeNull();
+		expect(stored.reply_to ?? null).toBeNull();
+	});
+});

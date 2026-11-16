@@ -9,6 +9,7 @@ import { jwtVerify, createRemoteJWKSet } from "jose";
 import { createRequestHandler } from "react-router";
 import { app as apiApp, receiveEmail } from "./index";
 import { EmailMCP } from "./mcp";
+import { runRetention } from "./lib/retention";
 import type { Env } from "./types";
 
 export { MailboxDO } from "./durableObject";
@@ -125,5 +126,9 @@ export default {
 			// Swallowing the error would silently drop the email.
 			throw e;
 		}
+	},
+	// Daily cron (see `triggers.crons` in wrangler.jsonc): auto-delete mail past its retention.
+	async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
+		ctx.waitUntil(runRetention(env));
 	},
 };
