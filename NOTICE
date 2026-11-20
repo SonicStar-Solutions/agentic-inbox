@@ -1,0 +1,13 @@
+Agentic Inbox
+
+This product is a modified version of Agentic Inbox, originally created by
+Cloudflare, Inc. (https://github.com/cloudflare/agentic-inbox) and licensed
+under the Apache License, Version 2.0 (see LICENSE).
+
+Original work:
+  Copyright (c) 2026 Cloudflare, Inc.
+
+Modifications:
+  Copyright (c) 2026 SonicStar Solutions Inc.
+
+Files that were modified or added are marked in their headers.

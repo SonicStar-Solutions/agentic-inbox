@@ -182,3 +182,5 @@ Any user who passes the shared Cloudflare Access policy can access all mailboxes
 ## License
 
 Apache 2.0 -- see [LICENSE](LICENSE).
+
+Originally created by Cloudflare, Inc. ([cloudflare/agentic-inbox](https://github.com/cloudflare/agentic-inbox)). This fork contains modifications and additions copyright (c) 2026 SonicStar Solutions Inc., released under the same license. See [NOTICE](NOTICE).

@@ -1,3 +1,9 @@
+/*
+ * Modifications Copyright (c) 2026 SonicStar Solutions Inc.
+ * Licensed under the Apache 2.0 license found in the LICENSE file or at:
+ *     https://opensource.org/licenses/Apache-2.0
+ */
+
 @import "@fontsource-variable/open-sans";
 @source "../node_modules/@cloudflare/kumo/dist/**/*.{js,jsx,ts,tsx}";
 @import "@cloudflare/kumo/styles/tailwind";
