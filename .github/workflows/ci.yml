@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  # Runs when a PR into main/develop is opened, updated or reopened. Never on merge/push.
+  pull_request:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Typecheck, test, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Generates the Cloudflare and React Router types, then runs tsc over every project.
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      # Proves the production bundle still builds. Needs no Cloudflare credentials.
+      - name: Build
+        run: npm run build

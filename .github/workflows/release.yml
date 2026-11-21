@@ -1,0 +1,85 @@
+name: Release Web
+
+on:
+  workflow_dispatch:
+    # The branch is chosen in the "Run workflow" dropdown (Use workflow from).
+    inputs:
+      version_bump:
+        description: "Version bump (from the latest vX.Y.Z tag; first release is v1.0.0)"
+        type: choice
+        options: [major, minor, bugfix]
+        default: bugfix
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-web
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build, tag, release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Generates the Cloudflare and React Router types, then runs tsc over every project.
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      # Version comes from the latest plain vX.Y.Z tag, so no commit is pushed back.
+      - name: Work out version
+        id: version
+        env:
+          VERSION_BUMP: ${{ inputs.version_bump }}
+        run: |
+          latest="$(git tag --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)"
+          if [ -z "$latest" ]; then
+            version="1.0.0"
+          else
+            IFS=. read -r major minor patch <<<"${latest#v}"
+            case "$VERSION_BUMP" in
+              major) major=$((major + 1)); minor=0; patch=0 ;;
+              minor) minor=$((minor + 1)); patch=0 ;;
+              *)     patch=$((patch + 1)) ;;
+            esac
+            version="$major.$minor.$patch"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Releasing v$version (previous: ${latest:-none})"
+
+      - name: Package build
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: zip -r "agentic-inbox-web-v$VERSION.zip" build
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release create "v$VERSION" "agentic-inbox-web-v$VERSION.zip" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "v$VERSION" \
+            --notes "Web build." \
+            --generate-notes

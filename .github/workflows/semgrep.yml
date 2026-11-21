@@ -1,0 +1,44 @@
+name: Semgrep
+
+on:
+  # Runs when a PR into main/develop is opened, updated or reopened. Never on merge/push.
+  pull_request:
+    branches: [main, develop]
+  schedule:
+    # Weekly, so newly published rules are applied to code that hasn't changed.
+    - cron: "17 5 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: semgrep-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  semgrep:
+    name: Semgrep scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    container:
+      image: semgrep/semgrep
+    steps:
+      - uses: actions/checkout@v4
+
+      # Open-source rules only: no Semgrep account or token. Fails the job on ERROR-severity
+      # findings; warnings are printed but don't block. Tighten with `--severity WARNING` later.
+      - name: Scan
+        run: >
+          semgrep scan
+          --metrics=off
+          --error
+          --severity ERROR
+          --config p/default
+          --config p/typescript
+          --config p/react
+          --config p/secrets
+          --config p/github-actions
+          --exclude node_modules
+          --exclude build
+          --exclude .wrangler
+          --exclude .react-router
